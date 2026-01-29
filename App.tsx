@@ -718,7 +718,7 @@ export default function App() {
               <Layers size={18} />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-slate-900 leading-none">全国医保影像AI识别大赛</h1>
+              <h1 className="text-lg font-bold text-slate-900 leading-none">全国医保影像AI识图大赛 进度管理平台</h1>
             </div>
           </div>
 
