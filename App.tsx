@@ -360,9 +360,8 @@ const Modal = ({ isOpen, onClose, title, children }: { isOpen: boolean; onClose:
 // --- Main App ---
 
 export default function App() {
-  const isProd = import.meta.env.MODE === 'production';
-  const API_BASE = isProd ? '' : (import.meta.env.VITE_API_BASE || '');
-  const SOCKET_URL = isProd ? window.location.origin : (import.meta.env.VITE_SOCKET_URL || window.location.origin);
+  const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5001';
+  const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:5001';
 
   const [data, setData] = useState<Phase[]>([]);
   const [user, setUser] = useState<UserInfo | null>(null);

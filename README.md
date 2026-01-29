@@ -14,8 +14,8 @@
 1. Install dependencies:
    `npm install`
 2. (Optional) Set frontend API endpoints in `.env.local`:
-   `VITE_API_BASE=http://localhost:5000`
-   `VITE_SOCKET_URL=http://localhost:5000`
+   `VITE_API_BASE=http://localhost:5001`
+   `VITE_SOCKET_URL=http://localhost:5001`
 3. Set up the backend:
    - Create a MySQL database `medai_tracker`
    - Copy `backend/.env.example` to `backend/.env` and update `DATABASE_URL`
