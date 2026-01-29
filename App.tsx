@@ -360,8 +360,8 @@ const Modal = ({ isOpen, onClose, title, children }: { isOpen: boolean; onClose:
 // --- Main App ---
 
 export default function App() {
-  const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000';
-  const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || API_BASE;
+  const API_BASE = import.meta.env.VITE_API_BASE || 'http://112.124.32.196:5000';
+  const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://112.124.32.196:5000';
 
   const [data, setData] = useState<Phase[]>([]);
   const [user, setUser] = useState<UserInfo | null>(null);
