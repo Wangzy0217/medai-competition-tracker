@@ -20,7 +20,7 @@ def create_app():
     app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "change-me")
     app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv(
         "DATABASE_URL",
-        "mysql+pymysql://root@localhost:3306/medai_tracker",
+        "mysql+pymysql://medai_tracker:12356789@localhost:3306/medai_tracker",
     )
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
