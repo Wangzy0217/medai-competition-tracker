@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Phase, Status, MainTask } from './types';
-import { STATUS_CONFIG } from './constants';
+import { STATUS_CONFIG, STATUS_ORDER } from './constants';
 import { 
-  CheckCircle2, RotateCcw, Save, Activity, Layers, Download, Clock, 
+  CheckCircle2, RotateCcw, Save, Layers, Download, Clock, AlertTriangle, AlertCircle, Pause, Play,
   ChevronDown, Users, Briefcase, Calendar, Plus, Trash2, Edit2, X, MoreVertical 
 } from 'lucide-react';
 import { io } from 'socket.io-client';
@@ -22,11 +22,14 @@ const StatusSelect = ({ status, onChange }: { status: Status; onChange: (s: Stat
           ${config.color}
         `}
       >
-        {Object.entries(STATUS_CONFIG).map(([key, conf]) => (
-          <option key={key} value={key}>
-            {conf.label}
-          </option>
-        ))}
+        {STATUS_ORDER.map((key) => {
+          const conf = STATUS_CONFIG[key];
+          return (
+            <option key={key} value={key}>
+              {conf.label}
+            </option>
+          );
+        })}
       </select>
       <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none opacity-50">
         <ChevronDown size={14} />
@@ -35,22 +38,63 @@ const StatusSelect = ({ status, onChange }: { status: Status; onChange: (s: Stat
   );
 };
 
+const StatusDot = ({ status, className = '', animated = false }: { status: Status; className?: string; animated?: boolean }) => {
+  const config = STATUS_CONFIG[status];
+  return (
+    <span
+      className={`inline-block rounded-full ${config.dot} ${animated ? 'status-dot-animated' : ''} ${className}`}
+      style={
+        animated
+          ? ({
+              '--status-glow': config.glow,
+              '--status-glow-strong': config.glowStrong
+            } as React.CSSProperties)
+          : undefined
+      }
+    />
+  );
+};
+
 const PhaseLine = () => (
-  <div className="absolute left-2 top-2 bottom-2 w-[2px] bg-tech-blue opacity-20 hidden md:block" />
+  <div className="absolute left-0 top-2 bottom-2 w-[2px] bg-tech-blue opacity-20 hidden md:block" />
 );
 
-const StatCard = ({ title, value, total, colorClass, icon: Icon }: any) => (
-  <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between hover:shadow-md transition-all duration-300 group">
-    <div>
-      <p className="text-slate-400 text-sm font-medium mb-1">{title}</p>
-      <div className="flex items-baseline gap-2">
-        <span className={`text-4xl font-bold ${colorClass} tracking-tight`}>{value}</span>
-        {total && <span className="text-slate-300 text-lg">/ {total}</span>}
+const Toast = ({ type, message }: { type: 'success' | 'error'; message: string }) => {
+  const styles = type === 'success'
+    ? 'bg-emerald-50/90 text-emerald-700 border-emerald-200'
+    : 'bg-red-50/90 text-red-700 border-red-200';
+  const Icon = type === 'success' ? CheckCircle2 : AlertCircle;
+  return (
+    <div className={`toast-shell relative flex items-start gap-2 px-4 py-3 rounded-xl border ${styles}`}>
+      <span className="toast-sheen" aria-hidden="true" />
+      <Icon size={18} className="mt-0.5" />
+      <div className="text-sm font-medium leading-relaxed">{message}</div>
+    </div>
+  );
+};
+
+const StatCard = ({ title, value, total, colorClass, icon: Icon, hover }: any) => (
+  <div className="relative bg-white p-6 rounded-2xl shadow-sm border border-slate-100 transition-all duration-300 group overflow-hidden hover:shadow-md">
+    <div className="flex items-center justify-between transition-all duration-300 group-hover:opacity-0 group-hover:-translate-y-1">
+      <div>
+        <p className="text-slate-400 text-sm font-medium mb-1">{title}</p>
+        <div className="flex items-baseline gap-2">
+          <span className={`text-4xl font-bold ${colorClass} tracking-tight`}>{value}</span>
+          {total && <span className="text-slate-300 text-lg">/ {total}</span>}
+        </div>
+      </div>
+      <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${colorClass.replace('text-', 'bg-').replace('600', '100').replace('500', '100')} group-hover:scale-110 transition-transform`}>
+        <Icon size={24} className={colorClass} />
       </div>
     </div>
-    <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${colorClass.replace('text-', 'bg-').replace('600', '100').replace('500', '100')} group-hover:scale-110 transition-transform`}>
-      <Icon size={24} className={colorClass} />
-    </div>
+    {hover && (
+      <div className={`absolute inset-0 rounded-2xl opacity-0 group-hover:opacity-100 transition-all duration-300 ${hover.bgClass}`}>
+        <div className="h-full w-full p-6 flex flex-col justify-center text-white">
+          <div className="text-sm font-semibold">{hover.title}</div>
+          <div className="mt-2 text-xs leading-relaxed text-white/90">{hover.desc}</div>
+        </div>
+      </div>
+    )}
   </div>
 );
 
@@ -372,7 +416,10 @@ export default function App() {
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [passwordForm, setPasswordForm] = useState({ oldPassword: '', newPassword: '' });
 
-  const [stats, setStats] = useState({ total: 0, completed: 0, progress: 0, risk: 0, pending: 0 });
+  const [stats, setStats] = useState({ total: 0, completed: 0, progress: 0, risk: 0, warning: 0, inProgress: 0, pending: 0 });
+  const [statusFilter, setStatusFilter] = useState<Status | 'ALL'>('ALL');
+  const [activePhaseId, setActivePhaseId] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ id: number; type: 'success' | 'error'; message: string } | null>(null);
   
   // Modal States
   const [activeModal, setActiveModal] = useState<'task' | 'group' | null>(null);
@@ -399,6 +446,10 @@ export default function App() {
     return res;
   }, [API_BASE, token]);
 
+  const showToast = useCallback((type: 'success' | 'error', message: string) => {
+    setToast({ id: Date.now(), type, message });
+  }, []);
+
   const fetchData = useCallback(async () => {
     if (!token) return;
     try {
@@ -424,6 +475,12 @@ export default function App() {
   }, [SOCKET_URL, fetchData, token]);
 
   useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 2200);
+    return () => clearTimeout(timer);
+  }, [toast?.id]);
+
+  useEffect(() => {
     if (!token) return;
     (async () => {
       try {
@@ -443,13 +500,38 @@ export default function App() {
   }, [avatarSeed]);
 
   useEffect(() => {
-    let total = 0, completed = 0, risk = 0, pending = 0;
+    if (data.length === 0) return;
+    setActivePhaseId((prev) => prev ?? data[0].id);
+    const elements = data
+      .map((phase) => document.getElementById(`phase-${phase.id}`))
+      .filter((el): el is HTMLElement => Boolean(el));
+    if (elements.length === 0) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+        if (visible[0]) {
+          const id = visible[0].target.id.replace('phase-', '');
+          setActivePhaseId(id);
+        }
+      },
+      { rootMargin: '-30% 0px -60% 0px', threshold: [0.1, 0.3, 0.6] }
+    );
+    elements.forEach((el) => observer.observe(el));
+    return () => observer.disconnect();
+  }, [data]);
+
+  useEffect(() => {
+    let total = 0, completed = 0, risk = 0, warning = 0, inProgress = 0, pending = 0;
     data.forEach(phase => {
       phase.mainTasks.forEach(mt => {
         mt.subTasks.forEach(st => {
           total++;
           if (st.status === Status.COMPLETED) completed++;
           if (st.status === Status.RISK) risk++;
+          if (st.status === Status.WARNING) warning++;
+          if (st.status === Status.IN_PROGRESS) inProgress++;
           if (st.status === Status.PENDING) pending++;
         });
       });
@@ -460,6 +542,8 @@ export default function App() {
       completed,
       progress: Math.round(total === 0 ? 0 : (completed / total) * 100),
       risk,
+      warning,
+      inProgress,
       pending
     });
   }, [data]);
@@ -519,17 +603,34 @@ export default function App() {
     }
   };
 
+  const normalizeStatusValue = (value: Status | string) => {
+    if (!value) return null;
+    if (typeof value !== 'string') return value as Status;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const upper = trimmed.toUpperCase();
+    if (STATUS_CONFIG[upper as Status]) return upper as Status;
+    const match = Object.entries(STATUS_CONFIG).find(([, conf]) => conf.label === trimmed);
+    return match ? (match[0] as Status) : null;
+  };
+
   const updateStatus = useCallback(async (_phaseId: string, _mainTaskId: string, subTaskId: string, newStatus: Status) => {
     try {
+      const normalizedStatus = normalizeStatusValue(newStatus);
+      if (!normalizedStatus) {
+        throw new Error(`invalid status: ${String(newStatus)}`);
+      }
       await apiRequest(`/api/sub-tasks/${subTaskId}`, {
         method: 'PATCH',
-        body: JSON.stringify({ status: newStatus })
+        body: JSON.stringify({ status: normalizedStatus })
       });
       await fetchData();
+      showToast('success', '状态切换成功');
     } catch (e) {
-      alert('更新状态失败');
+      const message = e instanceof Error ? e.message : '未知错误';
+      showToast('error', `状态切换失败：${message}`);
     }
-  }, [apiRequest, fetchData]);
+  }, [apiRequest, fetchData, showToast]);
 
   const handleDeleteTask = async (_phaseId: string, _mainTaskId: string, subTaskId: string) => {
     if (!confirm('确定删除此任务吗？')) return;
@@ -562,7 +663,12 @@ export default function App() {
   const openEditTask = (phaseId: string, mainTaskId: string, subTask: MainTask['subTasks'][number]) => {
     const owner = getOwnerInfo(subTask.owner);
     setModalTarget({ phaseId, mainTaskId, subTaskId: subTask.id, type: 'edit' });
-    setTaskForm({ description: subTask.description, group: owner.group, name: owner.name, deadline: subTask.deadline });
+    setTaskForm({
+      description: subTask.description,
+      group: owner.group,
+      name: owner.name,
+      deadline: toInputDate(subTask.deadline)
+    });
     setActiveModal('task');
   };
 
@@ -582,6 +688,7 @@ export default function App() {
 
   const submitTask = async () => {
     if (!taskForm.description) return alert('请填写任务描述');
+    if (!taskForm.deadline) return alert('请选择截止时间');
     const owner = `${taskForm.group}/${taskForm.name}`;
     
     try {
@@ -591,7 +698,7 @@ export default function App() {
           body: JSON.stringify({
             description: taskForm.description,
             owner: owner,
-            deadline: taskForm.deadline || '待定'
+            deadline: taskForm.deadline
           })
         });
       } else {
@@ -601,7 +708,7 @@ export default function App() {
             mainTaskId: modalTarget.mainTaskId,
             description: taskForm.description,
             owner: owner,
-            deadline: taskForm.deadline || '待定',
+            deadline: taskForm.deadline,
             status: Status.PENDING
           })
         });
@@ -649,6 +756,43 @@ export default function App() {
       return { group: parts[0], name: parts.slice(1).join('/') };
     }
     return { group: '通用', name: ownerStr };
+  };
+
+  const parseDeadline = (value: string) => {
+    if (!value) return null;
+    const trimmed = value.trim();
+    if (trimmed === '待定') return null;
+    const match = trimmed.match(/(\d{4})[./-](\d{1,2})[./-](\d{1,2})/);
+    if (!match) return null;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    if (!year || !month || !day) return null;
+    return { year, month, day };
+  };
+
+  const toInputDate = (value: string) => {
+    const parsed = parseDeadline(value);
+    if (!parsed) return '';
+    const mm = String(parsed.month).padStart(2, '0');
+    const dd = String(parsed.day).padStart(2, '0');
+    return `${parsed.year}-${mm}-${dd}`;
+  };
+
+  const formatDeadline = (value: string) => {
+    const parsed = parseDeadline(value);
+    if (!parsed) return value || '待定';
+    const mm = String(parsed.month).padStart(2, '0');
+    const dd = String(parsed.day).padStart(2, '0');
+    return `${parsed.year}.${mm}.${dd}`;
+  };
+
+  const statusCounts = {
+    [Status.PENDING]: stats.pending,
+    [Status.IN_PROGRESS]: stats.inProgress,
+    [Status.WARNING]: stats.warning,
+    [Status.RISK]: stats.risk,
+    [Status.COMPLETED]: stats.completed
   };
 
   if (!user) {
@@ -709,9 +853,80 @@ export default function App() {
 
   return (
     <div className="min-h-screen font-sans text-slate-700 pb-20 bg-slate-50/50">
+      <style>{`
+        @keyframes statusGlow {
+          0%, 100% { transform: scale(1); box-shadow: var(--status-glow); opacity: 0.85; }
+          50% { transform: scale(1.22); box-shadow: var(--status-glow-strong); opacity: 1; }
+        }
+        @keyframes ringSpin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        @keyframes ringPulse {
+          0%, 100% { box-shadow: 0 0 10px rgba(59, 130, 246, 0.25); opacity: 0.9; }
+          50% { box-shadow: 0 0 20px rgba(59, 130, 246, 0.55); opacity: 1; }
+        }
+        @keyframes corePulse {
+          0%, 100% { transform: scale(0.98); opacity: 0.95; }
+          50% { transform: scale(1.05); opacity: 1; }
+        }
+        .five-color-ring {
+          position: absolute;
+          inset: 0;
+          border-radius: 9999px;
+          background: conic-gradient(#94a3b8, #38bdf8, #fbbf24, #ef4444, #10b981, #94a3b8);
+          animation: ringSpin 10s linear infinite, ringPulse 2.8s ease-in-out infinite;
+          filter: saturate(1.2);
+        }
+        .five-color-core {
+          position: absolute;
+          inset: 6px;
+          border-radius: 9999px;
+          background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.95), rgba(248,250,252,0.9));
+          animation: corePulse 2.8s ease-in-out infinite;
+        }
+        .status-dot-animated {
+          animation: statusGlow 2.4s ease-in-out infinite;
+          transform-origin: center;
+        }
+        @keyframes toastIn {
+          0% { transform: translateY(-10px) scale(0.96); opacity: 0; }
+          60% { transform: translateY(0) scale(1.02); opacity: 1; }
+          100% { transform: translateY(0) scale(1); opacity: 1; }
+        }
+        @keyframes toastGlow {
+          0%, 100% { box-shadow: 0 10px 26px rgba(15, 23, 42, 0.14), 0 0 0 rgba(59, 130, 246, 0); }
+          50% { box-shadow: 0 14px 34px rgba(15, 23, 42, 0.2), 0 0 18px rgba(59, 130, 246, 0.25); }
+        }
+        @keyframes toastSheen {
+          0% { transform: translateX(-140%); opacity: 0; }
+          30% { opacity: 0.35; }
+          100% { transform: translateX(140%); opacity: 0; }
+        }
+        .toast-shell {
+          animation: toastIn 0.45s ease-out, toastGlow 2.4s ease-in-out infinite;
+          backdrop-filter: blur(8px);
+          overflow: hidden;
+        }
+        .toast-sheen {
+          position: absolute;
+          inset: 0;
+          background: linear-gradient(120deg, transparent 0%, rgba(255,255,255,0.6) 45%, transparent 70%);
+          transform: translateX(-140%);
+          animation: toastSheen 1.8s ease-in-out infinite;
+          pointer-events: none;
+        }
+      `}</style>
       
       {/* --- Sticky Header --- */}
-      <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-slate-200/60 shadow-sm">
+      <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-slate-200/60 shadow-sm relative">
+        {toast && (
+          <div className="absolute inset-x-0 top-0 h-16 flex items-center justify-center z-10 pointer-events-none">
+            <div className="max-w-[340px] w-[320px]">
+              <Toast type={toast.type} message={toast.message} />
+            </div>
+          </div>
+        )}
         <div className="w-full max-w-[98%] xl:max-w-[2000px] mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 bg-tech-blue rounded-lg flex items-center justify-center text-white shadow-lg shadow-blue-900/20">
@@ -757,23 +972,203 @@ export default function App() {
         ) : (
         <>
           {/* --- Dashboard Stats --- */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-16">
-            <StatCard title="总体完成度" value={`${stats.progress}%`} colorClass="text-tech-blue" icon={Activity} />
-            <StatCard title="已完成任务" value={stats.completed} total={stats.total} colorClass="text-emerald-600" icon={CheckCircle2} />
-            <StatCard title="进行中" value={stats.total - stats.completed - stats.pending} colorClass="text-amber-500" icon={Clock} />
-            <StatCard title="风险项" value={stats.risk} colorClass="text-red-500" icon={Clock} />
+          <div className="mb-6 flex items-center gap-3">
+            <div className="relative w-10 h-10">
+              <div className="five-color-ring" />
+              <div className="five-color-core" />
+            </div>
+            <div>
+              <div className="text-xs uppercase tracking-[0.35em] text-slate-400">Five Color Method</div>
+              <h2 className="text-lg font-bold text-slate-800">五色项目管理法</h2>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-10">
+            <StatCard
+              title="未开始"
+              value={stats.pending}
+              total={stats.total}
+              colorClass="text-slate-500"
+              icon={Pause}
+              hover={{
+                title: '灰色：未开始',
+                desc: '任务尚未启动，等待资源或排期。',
+                bgClass: 'bg-slate-500'
+              }}
+            />
+            <StatCard
+              title="已完成任务"
+              value={stats.completed}
+              total={stats.total}
+              colorClass="text-emerald-600"
+              icon={CheckCircle2}
+              hover={{
+                title: '绿色：已完成',
+                desc: '任务已闭环完成，可归档与复盘。',
+                bgClass: 'bg-emerald-600'
+              }}
+            />
+            <StatCard
+              title="进行中"
+              value={stats.inProgress}
+              colorClass="text-sky-600"
+              icon={Play}
+              hover={{
+                title: '蓝色：进行中',
+                desc: '任务正在推进，持续跟进进度。',
+                bgClass: 'bg-sky-600'
+              }}
+            />
+            <StatCard
+              title="需关注"
+              value={stats.warning}
+              colorClass="text-amber-500"
+              icon={AlertTriangle}
+              hover={{
+                title: '黄色：需关注',
+                desc: '任务接近逾期或有风险，需要关注。',
+                bgClass: 'bg-amber-500'
+              }}
+            />
+            <StatCard
+              title="已逾期"
+              value={stats.risk}
+              colorClass="text-red-500"
+              icon={AlertCircle}
+              hover={{
+                title: '红色：已逾期',
+                desc: '任务已逾期，请优先处理。',
+                bgClass: 'bg-red-600'
+              }}
+            />
           </div>
 
-          <div className="space-y-16">
-          {data.map((phase, pIdx) => (
-            <div key={phase.id} className="relative">
+          <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-6 items-start">
+            <aside className="hidden lg:block sticky top-[94px] self-start z-40 max-h-[calc(100vh-120px)]">
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-3 w-full max-w-[250px]">
+                <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">关键节点</div>
+                <div className="space-y-1.5 max-h-[calc(100vh-180px)] overflow-auto pr-1">
+                  {data.map((phase, idx) => {
+                    const isActive = activePhaseId === phase.id;
+                    return (
+                      <a
+                        key={phase.id}
+                        href={`#phase-${phase.id}`}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          const el = document.getElementById(`phase-${phase.id}`);
+                          if (el) {
+                            el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                            history.replaceState(null, '', `#phase-${phase.id}`);
+                          }
+                          setActivePhaseId(phase.id);
+                        }}
+                        className={`grid grid-cols-[26px_1fr] gap-2 items-center px-2.5 py-2 rounded-lg text-[13px] transition-colors ${
+                          isActive
+                            ? 'font-semibold text-tech-blue bg-slate-100'
+                            : 'text-slate-600 hover:text-tech-blue hover:bg-slate-50'
+                        }`}
+                      >
+                        <span className={`w-6 h-6 rounded-full border text-xs font-bold flex items-center justify-center ${
+                          isActive ? 'border-tech-blue/40 text-tech-blue bg-blue-50' : 'border-slate-200 text-slate-500 bg-slate-50'
+                        }`}>
+                          {idx + 1}
+                        </span>
+                        <span className="whitespace-normal leading-snug text-left">{phase.title}</span>
+                      </a>
+                    );
+                  })}
+                </div>
+              </div>
+            </aside>
 
-              <div className="grid grid-cols-1 md:grid-cols-12 gap-8 relative">
+            <div className="min-w-0">
+              <div className="sticky top-[94px] z-40">
+                <div className="mb-4 lg:hidden">
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-3 w-full max-w-[250px]">
+                    <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">关键节点</div>
+                    <div className="space-y-1.5 max-h-[260px] overflow-auto pr-1">
+                      {data.map((phase, idx) => {
+                        const isActive = activePhaseId === phase.id;
+                        return (
+                          <a
+                            key={phase.id}
+                            href={`#phase-${phase.id}`}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              const el = document.getElementById(`phase-${phase.id}`);
+                              if (el) {
+                                el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                                history.replaceState(null, '', `#phase-${phase.id}`);
+                              }
+                              setActivePhaseId(phase.id);
+                            }}
+                            className={`grid grid-cols-[26px_1fr] gap-2 px-2.5 py-2 rounded-lg text-[13px] transition-colors ${
+                              isActive
+                                ? 'font-semibold text-tech-blue bg-slate-100'
+                                : 'text-slate-600 hover:text-tech-blue hover:bg-slate-50'
+                            }`}
+                          >
+                            <span className={`w-6 h-6 mt-0.5 rounded-full border text-xs font-bold flex items-center justify-center ${
+                              isActive ? 'border-tech-blue/40 text-tech-blue bg-blue-50' : 'border-slate-200 text-slate-500 bg-slate-50'
+                            }`}>
+                              {idx + 1}
+                            </span>
+                            <span className="whitespace-normal leading-snug text-left">{phase.title}</span>
+                          </a>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+                <div className="relative bg-white/95 backdrop-blur rounded-2xl border border-slate-200 shadow-[0_10px_24px_rgba(15,23,42,0.08)] px-4 py-[17px]">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">状态筛选</div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        onClick={() => setStatusFilter('ALL')}
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold transition-colors ${
+                          statusFilter === 'ALL'
+                            ? 'bg-tech-blue text-white border-tech-blue shadow-sm'
+                            : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                        }`}
+                      >
+                        <span>全部</span>
+                        <span className={`text-[11px] ${statusFilter === 'ALL' ? 'text-white/80' : 'text-slate-400'}`}>({stats.total})</span>
+                      </button>
+                      {STATUS_ORDER.map((status) => {
+                        const conf = STATUS_CONFIG[status];
+                        const isActive = statusFilter === status;
+                        return (
+                          <button
+                            key={status}
+                            onClick={() => setStatusFilter(status)}
+                            className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold transition-colors ${
+                              isActive
+                                ? `${conf.color} shadow-sm`
+                                : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                            }`}
+                          >
+                            <StatusDot status={status} className="w-2 h-2" />
+                            <span>{conf.label}</span>
+                            <span className={`text-[11px] ${isActive ? 'opacity-70' : 'text-slate-400'}`}>({statusCounts[status]})</span>
+                          </button>
+                        );
+                    })}
+                  </div>
+                </div>
+              </div>
+              </div>
+
+              <div className="space-y-16 mt-5">
+                {data.map((phase, pIdx) => (
+            <div key={phase.id} id={`phase-${phase.id}`} className="relative scroll-mt-[170px]">
+
+              <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-6 relative">
                 
                 {/* Left Column: Phase Title & Add Group Button */}
-                <div className="md:col-span-12 lg:col-span-2 relative z-10 mb-6 lg:mb-0 pl-6">
+                <div className="relative z-10 mb-6 lg:mb-0 pl-6">
                   {pIdx !== data.length - 1 && <PhaseLine />}
-                  <div className="lg:sticky lg:top-28">
+                  <div className="lg:sticky lg:top-[170px]">
                     <div className="flex lg:flex-col items-center lg:items-start gap-4 lg:gap-2">
                       <div className="w-14 h-14 bg-white border-2 border-tech-blue text-tech-blue rounded-2xl flex items-center justify-center font-bold text-2xl shadow-lg shadow-blue-900/5">
                         {pIdx + 1}
@@ -798,9 +1193,21 @@ export default function App() {
                 </div>
 
                 {/* Right Column: Tasks */}
-                <div className="md:col-span-12 lg:col-span-10 space-y-8">
-                  {phase.mainTasks.map((task) => (
-                    <div key={task.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden hover:shadow-lg transition-all duration-300 group">
+                <div className="space-y-8">
+                  {(() => {
+                    const visibleTasks = statusFilter === 'ALL'
+                      ? phase.mainTasks
+                      : phase.mainTasks.filter((task) => task.subTasks.some((subTask) => subTask.status === statusFilter));
+
+                    return (
+                    <>
+                    {visibleTasks.map((task) => {
+                      const visibleSubTasks = statusFilter === 'ALL'
+                        ? task.subTasks
+                        : task.subTasks.filter((subTask) => subTask.status === statusFilter);
+
+                      return (
+                      <div key={task.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden hover:shadow-lg transition-all duration-300 group">
                       {/* Group Header */}
                       <div className="p-6 border-b border-slate-100 bg-slate-50/80 flex flex-col md:flex-row md:items-center justify-between gap-4">
                          <div className="flex items-center gap-3">
@@ -808,7 +1215,7 @@ export default function App() {
                            <h3 className="text-lg font-bold text-slate-800">{task.title}</h3>
                            <button 
                             onClick={() => openAddTask(phase.id, task.id)}
-                            className="flex items-center gap-1.5 px-2.5 py-1 bg-tech-blue text-white text-xs rounded-lg hover:bg-blue-900 transition-colors shadow-sm shadow-blue-900/20"
+                            className="flex items-center gap-1.5 px-2.5 py-1 text-tech-blue text-xs rounded-lg bg-blue-50 hover:bg-blue-100 border border-blue-200 transition-colors"
                            >
                              <Plus size={12} />
                              <span>添加任务</span>
@@ -839,7 +1246,7 @@ export default function App() {
                             <div className="col-span-2 text-center">状态</div>
                         </div>
 
-                        {task.subTasks.map((subTask) => {
+                        {visibleSubTasks.map((subTask) => {
                           const { group, name } = getOwnerInfo(subTask.owner);
                           return (
                             <div key={subTask.id} className="p-6 grid grid-cols-1 md:grid-cols-12 gap-4 items-center hover:bg-blue-50/30 transition-colors group/row relative">
@@ -865,7 +1272,7 @@ export default function App() {
                                 {/* Column 1: Description */}
                                 <div className="md:col-span-4 pr-4">
                                     <div className="flex items-start gap-3">
-                                        <div className="mt-2 w-2 h-2 rounded-full bg-slate-300 shrink-0 group-hover/row:bg-tech-blue transition-colors"></div>
+                                        <StatusDot status={subTask.status} animated className="mt-1.5 w-3.5 h-3.5 shrink-0 ring-2 ring-white/80" />
                                         <p className="text-base font-medium text-slate-700 leading-relaxed">{subTask.description}</p>
                                     </div>
                                 </div>
@@ -888,7 +1295,7 @@ export default function App() {
                                 <div className="md:col-span-2 flex items-center gap-2 text-sm text-slate-600">
                                     <span className="md:hidden text-xs font-bold text-slate-400 bg-slate-100 px-1.5 rounded">截止:</span>
                                     <Calendar size={14} className="text-slate-400 hidden md:block" />
-                                    <span className="font-mono">{subTask.deadline}</span>
+                                    <span className="font-mono">{formatDeadline(subTask.deadline)}</span>
                                 </div>
 
                                 {/* Column 5: Status */}
@@ -901,14 +1308,23 @@ export default function App() {
                             </div>
                           );
                         })}
-                        {task.subTasks.length === 0 && (
+                        {statusFilter === 'ALL' && task.subTasks.length === 0 && (
                           <div className="p-8 text-center text-slate-400 text-sm">
                             暂无任务，请点击右上角添加
                           </div>
                         )}
                       </div>
                     </div>
-                  ))}
+                    );
+                    })}
+                    {statusFilter !== 'ALL' && visibleTasks.length === 0 && phase.mainTasks.length > 0 && (
+                      <div className="bg-slate-50 border border-dashed border-slate-200 rounded-xl p-8 text-center text-slate-400">
+                        此阶段暂无符合筛选条件的任务
+                      </div>
+                    )}
+                    </>
+                  );
+                })()}
                   {phase.mainTasks.length === 0 && (
                      <div className="bg-slate-50 border-2 border-dashed border-slate-200 rounded-xl p-8 text-center text-slate-400">
                         此阶段暂无分组，请点击左侧添加分组
@@ -918,7 +1334,9 @@ export default function App() {
               </div>
             </div>
           ))}
-        </div>
+                </div>
+              </div>
+            </div>
         </>
         )}
       </main>
@@ -971,9 +1389,8 @@ export default function App() {
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">截止时间</label>
             <input 
-              type="text" 
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-tech-blue/50 outline-none"
-              placeholder="例如: 2026.02.15"
+              type="date" 
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-tech-blue/50 outline-none text-slate-900"
               value={taskForm.deadline}
               onChange={e => setTaskForm({...taskForm, deadline: e.target.value})}
             />

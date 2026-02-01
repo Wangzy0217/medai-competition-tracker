@@ -1,4 +1,37 @@
+import re
+from datetime import date
+
 from models import Phase
+
+
+def _parse_deadline(deadline: str):
+    if not deadline:
+        return None
+    trimmed = deadline.strip()
+    if trimmed in {"待定", "TBD", "tbd"}:
+        return None
+    match = re.search(r"(\d{4})[./-](\d{1,2})[./-](\d{1,2})", trimmed)
+    if not match:
+        return None
+    year, month, day = map(int, match.groups())
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+def _derive_status(current_status: str, deadline: str):
+    if current_status in {"COMPLETED", "RISK"}:
+        return current_status
+    parsed = _parse_deadline(deadline)
+    if not parsed:
+        return current_status
+    days_left = (parsed - date.today()).days
+    if days_left < 0:
+        return "RISK"
+    if days_left <= 3:
+        return "WARNING"
+    return current_status
 
 
 def serialize_phase(phase: Phase):
@@ -17,7 +50,7 @@ def serialize_phase(phase: Phase):
                         "description": st.description,
                         "owner": st.owner,
                         "deadline": st.deadline,
-                        "status": st.status,
+                        "status": _derive_status(st.status, st.deadline),
                     }
                     for st in mt.sub_tasks
                 ],

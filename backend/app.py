@@ -29,7 +29,28 @@ def create_app():
     Migrate(app, db)
     socketio = SocketIO(app, cors_allowed_origins="*")
 
-    valid_statuses = {"PENDING", "IN_PROGRESS", "COMPLETED", "RISK"}
+    valid_statuses = {"PENDING", "IN_PROGRESS", "WARNING", "COMPLETED", "RISK"}
+    status_aliases = {
+        "未开始": "PENDING",
+        "进行中": "IN_PROGRESS",
+        "即将逾期": "WARNING",
+        "已完成": "COMPLETED",
+        "已逾期": "RISK",
+    }
+
+    def normalize_status(value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            raw = value.strip()
+            if raw in valid_statuses:
+                return raw
+            upper = raw.upper()
+            if upper in valid_statuses:
+                return upper
+            if raw in status_aliases:
+                return status_aliases[raw]
+        return value
     token_serializer = URLSafeTimedSerializer(app.config["SECRET_KEY"])
 
     with app.app_context():
@@ -319,9 +340,9 @@ def create_app():
         description = payload.get("description")
         owner = payload.get("owner")
         deadline = payload.get("deadline")
-        status = payload.get("status", "PENDING")
+        status = normalize_status(payload.get("status", "PENDING"))
         if status not in valid_statuses:
-            return jsonify({"error": "invalid status"}), 400
+            return jsonify({"error": "invalid status", "received": status}), 400
         if not main_task_id or not description or not owner or not deadline:
             return jsonify({"error": "mainTaskId, description, owner, deadline are required"}), 400
         order_index = payload.get(
@@ -354,9 +375,10 @@ def create_app():
         if "deadline" in payload:
             sub_task.deadline = payload["deadline"]
         if "status" in payload:
-            if payload["status"] not in valid_statuses:
-                return jsonify({"error": "invalid status"}), 400
-            sub_task.status = payload["status"]
+            status = normalize_status(payload["status"])
+            if status not in valid_statuses:
+                return jsonify({"error": "invalid status", "received": status}), 400
+            sub_task.status = status
         if "orderIndex" in payload:
             sub_task.order_index = payload["orderIndex"]
         db.session.commit()

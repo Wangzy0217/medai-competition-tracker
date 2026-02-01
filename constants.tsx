@@ -1,32 +1,61 @@
 import { Phase, Status } from './types';
-import { LayoutDashboard, CheckCircle2, AlertCircle, Clock } from 'lucide-react';
+import { LayoutDashboard, CheckCircle2, AlertCircle, AlertTriangle, Clock } from 'lucide-react';
 
 export const STATUS_CONFIG = {
   [Status.PENDING]: {
-    label: '待开始',
-    color: 'bg-slate-200 text-slate-500 border-slate-300',
+    label: '未开始',
+    color: 'bg-slate-200 text-slate-600 border-slate-300',
+    dot: 'bg-slate-400',
+    glow: '0 0 10px rgba(148, 163, 184, 0.35)',
+    glowStrong: '0 0 18px rgba(148, 163, 184, 0.6)',
     icon: <Clock size={14} />,
     next: Status.IN_PROGRESS
   },
   [Status.IN_PROGRESS]: {
     label: '进行中',
-    color: 'bg-yellow-50 text-yellow-700 border-yellow-400 ring-1 ring-yellow-400/30',
+    color: 'bg-sky-50 text-sky-700 border-sky-400 ring-1 ring-sky-400/30',
+    dot: 'bg-sky-400',
+    glow: '0 0 12px rgba(56, 189, 248, 0.35)',
+    glowStrong: '0 0 20px rgba(56, 189, 248, 0.6)',
     icon: <LayoutDashboard size={14} />,
-    next: Status.COMPLETED
+    next: Status.WARNING
+  },
+  [Status.WARNING]: {
+    label: '即将逾期',
+    color: 'bg-amber-50 text-amber-700 border-amber-400 ring-1 ring-amber-400/30',
+    dot: 'bg-amber-400',
+    glow: '0 0 12px rgba(251, 191, 36, 0.35)',
+    glowStrong: '0 0 20px rgba(251, 191, 36, 0.6)',
+    icon: <AlertTriangle size={14} />,
+    next: Status.RISK
   },
   [Status.COMPLETED]: {
     label: '已完成',
     color: 'bg-emerald-50 text-emerald-700 border-emerald-500 ring-1 ring-emerald-500/30',
+    dot: 'bg-emerald-500',
+    glow: '0 0 12px rgba(16, 185, 129, 0.35)',
+    glowStrong: '0 0 20px rgba(16, 185, 129, 0.6)',
     icon: <CheckCircle2 size={14} />,
-    next: Status.RISK
+    next: Status.PENDING
   },
   [Status.RISK]: {
-    label: '风险/滞后',
+    label: '已逾期',
     color: 'bg-red-50 text-red-700 border-red-400 ring-1 ring-red-400/30',
+    dot: 'bg-red-500',
+    glow: '0 0 12px rgba(239, 68, 68, 0.35)',
+    glowStrong: '0 0 20px rgba(239, 68, 68, 0.6)',
     icon: <AlertCircle size={14} />,
-    next: Status.PENDING
+    next: Status.COMPLETED
   }
 };
+
+export const STATUS_ORDER: Status[] = [
+  Status.PENDING,
+  Status.IN_PROGRESS,
+  Status.WARNING,
+  Status.RISK,
+  Status.COMPLETED
+];
 
 export const INITIAL_DATA: Phase[] = [
   {
