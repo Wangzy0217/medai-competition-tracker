@@ -1261,7 +1261,7 @@ export default function App() {
                         : task.subTasks.filter((subTask) => subTask.status === statusFilter);
 
                       return (
-                      <div key={task.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden hover:shadow-lg transition-all duration-300 group">
+                      <div key={task.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-visible hover:shadow-lg transition-all duration-300 group">
                       {/* Group Header */}
                       <div className="p-6 border-b border-slate-100 bg-slate-50/80 flex flex-col md:flex-row md:items-center justify-between gap-4">
                          <div className="flex flex-wrap items-center gap-3 min-w-0">
