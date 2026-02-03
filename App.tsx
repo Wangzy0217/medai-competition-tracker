@@ -9,10 +9,18 @@ import { io } from 'socket.io-client';
 
 // --- Modals & Helper Components ---
 
-const StatusSelect = ({ status, onChange }: { status: Status; onChange: (s: Status) => void }) => {
+const StatusSelect = ({
+  status,
+  onChange,
+  allowComplete = true
+}: {
+  status: Status;
+  onChange: (s: Status) => void;
+  allowComplete?: boolean;
+}) => {
   const config = STATUS_CONFIG[status];
   return (
-    <div className="relative inline-block group w-[140px] max-w-full">
+    <div className="relative inline-block group w-full min-w-[120px] max-w-[160px]">
       <select
         value={status}
         onChange={(e) => onChange(e.target.value as Status)}
@@ -24,8 +32,9 @@ const StatusSelect = ({ status, onChange }: { status: Status; onChange: (s: Stat
       >
         {STATUS_ORDER.map((key) => {
           const conf = STATUS_CONFIG[key];
+          const disabled = key === 'COMPLETED' && !allowComplete;
           return (
-            <option key={key} value={key}>
+            <option key={key} value={key} disabled={disabled}>
               {conf.label}
             </option>
           );
@@ -104,7 +113,7 @@ type UserInfo = {
   phone: string;
   group: string;
   roleTitle: string;
-  role: 'admin' | 'user';
+  role: 'admin' | 'sub_admin' | 'user';
 };
 
 const Avatar = ({ seed, name }: { seed: string; name: string }) => {
@@ -253,22 +262,34 @@ const AuthCard = ({
 
 const AdminPanel = ({
   token,
-  apiRequest
+  apiRequest,
+  role
 }: {
   token: string;
   apiRequest: (path: string, options?: RequestInit) => Promise<Response>;
+  role: UserInfo['role'];
 }) => {
   const [users, setUsers] = useState<UserInfo[]>([]);
   const [logs, setLogs] = useState<any[]>([]);
   const [editUser, setEditUser] = useState<UserInfo | null>(null);
   const [editForm, setEditForm] = useState({ name: '', phone: '', group: '', roleTitle: '', role: 'user', password: '' });
+  const canManageUsers = role === 'admin';
+  const canViewLogs = role === 'admin' || role === 'sub_admin';
 
   const loadAdmin = useCallback(async () => {
-    const userRes = await apiRequest('/api/admin/users');
-    const logRes = await apiRequest('/api/admin/logs');
-    setUsers(await userRes.json());
-    setLogs(await logRes.json());
-  }, [apiRequest]);
+    if (canManageUsers) {
+      const userRes = await apiRequest('/api/admin/users');
+      setUsers(await userRes.json());
+    } else {
+      setUsers([]);
+    }
+    if (canViewLogs) {
+      const logRes = await apiRequest('/api/admin/logs');
+      setLogs(await logRes.json());
+    } else {
+      setLogs([]);
+    }
+  }, [apiRequest, canManageUsers, canViewLogs]);
 
   useEffect(() => {
     loadAdmin();
@@ -291,91 +312,98 @@ const AdminPanel = ({
 
   return (
     <div className="space-y-8">
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
-        <h2 className="text-lg font-bold text-slate-800 mb-4">用户管理</h2>
-        <div className="overflow-auto">
-          <table className="min-w-full text-sm">
-            <thead className="text-slate-500">
-              <tr>
-                <th className="text-left py-2">姓名</th>
-                <th className="text-left py-2">手机号</th>
-                <th className="text-left py-2">组别</th>
-                <th className="text-left py-2">职务</th>
-                <th className="text-left py-2">角色</th>
-                <th className="text-left py-2">操作</th>
-              </tr>
-            </thead>
-            <tbody className="text-slate-700">
-              {users.map(u => (
-                <tr key={u.id} className="border-t border-slate-100">
-                  <td className="py-2">{u.name}</td>
-                  <td className="py-2">{u.phone}</td>
-                  <td className="py-2">{u.group}</td>
-                  <td className="py-2">{u.roleTitle}</td>
-                  <td className="py-2">{u.role}</td>
-                  <td className="py-2">
-                    <button onClick={() => openEdit(u)} className="text-tech-blue hover:underline">编辑</button>
-                  </td>
+      {canManageUsers && (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+          <h2 className="text-lg font-bold text-slate-800 mb-4">用户管理</h2>
+          <div className="overflow-auto">
+            <table className="min-w-full text-sm">
+              <thead className="text-slate-500">
+                <tr>
+                  <th className="text-left py-2">姓名</th>
+                  <th className="text-left py-2">手机号</th>
+                  <th className="text-left py-2">组别</th>
+                  <th className="text-left py-2">职务</th>
+                  <th className="text-left py-2">角色</th>
+                  <th className="text-left py-2">操作</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="text-slate-700">
+                {users.map(u => (
+                  <tr key={u.id} className="border-t border-slate-100">
+                    <td className="py-2">{u.name}</td>
+                    <td className="py-2">{u.phone}</td>
+                    <td className="py-2">{u.group}</td>
+                    <td className="py-2">{u.roleTitle}</td>
+                    <td className="py-2">{u.role}</td>
+                    <td className="py-2">
+                      <button onClick={() => openEdit(u)} className="text-tech-blue hover:underline">编辑</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      )}
 
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
-        <h2 className="text-lg font-bold text-slate-800 mb-4">操作记录</h2>
-        <div className="space-y-3 max-h-[420px] overflow-auto">
-          {logs.map((l) => (
-            <div key={l.id} className="text-sm text-slate-600 border-b border-slate-100 pb-2">
-              <div className="font-semibold text-slate-700">{l.userName} · {l.action}</div>
-              <div className="text-xs text-slate-400">{l.createdAt}</div>
-              {l.details && <div className="mt-1">{l.details}</div>}
-            </div>
-          ))}
+      {canViewLogs && (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+          <h2 className="text-lg font-bold text-slate-800 mb-4">操作记录</h2>
+          <div className="space-y-3 max-h-[420px] overflow-auto">
+            {logs.map((l) => (
+              <div key={l.id} className="text-sm text-slate-600 border-b border-slate-100 pb-2">
+                <div className="font-semibold text-slate-700">{l.userName} · {l.actionLabel || l.action}</div>
+                <div className="text-xs text-slate-400">{l.createdAt}</div>
+                {l.details && <div className="mt-1 break-words">内容：{l.details}</div>}
+              </div>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
-      <Modal isOpen={!!editUser} onClose={() => setEditUser(null)} title="编辑用户">
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">姓名</label>
-              <input className="w-full px-3 py-2 border border-slate-300 rounded-lg" value={editForm.name} onChange={e => setEditForm({ ...editForm, name: e.target.value })} />
+      {canManageUsers && (
+        <Modal isOpen={!!editUser} onClose={() => setEditUser(null)} title="编辑用户">
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">姓名</label>
+                <input className="w-full px-3 py-2 border border-slate-300 rounded-lg" value={editForm.name} onChange={e => setEditForm({ ...editForm, name: e.target.value })} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">手机号</label>
+                <input className="w-full px-3 py-2 border border-slate-300 rounded-lg" value={editForm.phone} onChange={e => setEditForm({ ...editForm, phone: e.target.value })} />
+              </div>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">手机号</label>
-              <input className="w-full px-3 py-2 border border-slate-300 rounded-lg" value={editForm.phone} onChange={e => setEditForm({ ...editForm, phone: e.target.value })} />
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">组别</label>
+                <input className="w-full px-3 py-2 border border-slate-300 rounded-lg" value={editForm.group} onChange={e => setEditForm({ ...editForm, group: e.target.value })} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">组内职务</label>
+                <input className="w-full px-3 py-2 border border-slate-300 rounded-lg" value={editForm.roleTitle} onChange={e => setEditForm({ ...editForm, roleTitle: e.target.value })} />
+              </div>
             </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">角色</label>
+                <select className="w-full px-3 py-2 border border-slate-300 rounded-lg" value={editForm.role} onChange={e => setEditForm({ ...editForm, role: e.target.value })}>
+                  <option value="user">用户</option>
+                  <option value="sub_admin">子管理员</option>
+                  <option value="admin">管理员</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">重置密码</label>
+                <input type="password" className="w-full px-3 py-2 border border-slate-300 rounded-lg" value={editForm.password} onChange={e => setEditForm({ ...editForm, password: e.target.value })} placeholder="留空不修改" />
+              </div>
+            </div>
+            <button onClick={submitEdit} className="w-full bg-tech-blue text-white font-bold py-2.5 rounded-lg hover:bg-blue-900 transition-colors">
+              保存修改
+            </button>
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">组别</label>
-              <input className="w-full px-3 py-2 border border-slate-300 rounded-lg" value={editForm.group} onChange={e => setEditForm({ ...editForm, group: e.target.value })} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">组内职务</label>
-              <input className="w-full px-3 py-2 border border-slate-300 rounded-lg" value={editForm.roleTitle} onChange={e => setEditForm({ ...editForm, roleTitle: e.target.value })} />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">角色</label>
-              <select className="w-full px-3 py-2 border border-slate-300 rounded-lg" value={editForm.role} onChange={e => setEditForm({ ...editForm, role: e.target.value })}>
-                <option value="user">用户</option>
-                <option value="admin">管理员</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">重置密码</label>
-              <input type="password" className="w-full px-3 py-2 border border-slate-300 rounded-lg" value={editForm.password} onChange={e => setEditForm({ ...editForm, password: e.target.value })} placeholder="留空不修改" />
-            </div>
-          </div>
-          <button onClick={submitEdit} className="w-full bg-tech-blue text-white font-bold py-2.5 rounded-lg hover:bg-blue-900 transition-colors">
-            保存修改
-          </button>
-        </div>
-      </Modal>
+        </Modal>
+      )}
     </div>
   );
 };
@@ -420,6 +448,7 @@ export default function App() {
   const [statusFilter, setStatusFilter] = useState<Status | 'ALL'>('ALL');
   const [activePhaseId, setActivePhaseId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ id: number; type: 'success' | 'error'; message: string } | null>(null);
+  const [openActionId, setOpenActionId] = useState<string | null>(null);
   
   // Modal States
   const [activeModal, setActiveModal] = useState<'task' | 'group' | null>(null);
@@ -479,6 +508,24 @@ export default function App() {
     const timer = setTimeout(() => setToast(null), 2200);
     return () => clearTimeout(timer);
   }, [toast?.id]);
+  
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('[data-action-menu]')) return;
+      setOpenActionId(null);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpenActionId(null);
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
 
   useEffect(() => {
     if (!token) return;
@@ -620,6 +667,10 @@ export default function App() {
       if (!normalizedStatus) {
         throw new Error(`invalid status: ${String(newStatus)}`);
       }
+      if (normalizedStatus === 'COMPLETED' && user?.role !== 'admin' && user?.role !== 'sub_admin') {
+        showToast('error', '无权限将状态修改为已完成');
+        return;
+      }
       await apiRequest(`/api/sub-tasks/${subTaskId}`, {
         method: 'PATCH',
         body: JSON.stringify({ status: normalizedStatus })
@@ -630,7 +681,7 @@ export default function App() {
       const message = e instanceof Error ? e.message : '未知错误';
       showToast('error', `状态切换失败：${message}`);
     }
-  }, [apiRequest, fetchData, showToast]);
+  }, [apiRequest, fetchData, showToast, user?.role]);
 
   const handleDeleteTask = async (_phaseId: string, _mainTaskId: string, subTaskId: string) => {
     if (!confirm('确定删除此任务吗？')) return;
@@ -927,7 +978,7 @@ export default function App() {
             </div>
           </div>
         )}
-        <div className="w-full max-w-[98%] xl:max-w-[2000px] mx-auto px-6 h-16 flex items-center justify-between">
+        <div className="w-full max-w-[98%] xl:max-w-[2000px] mx-auto px-6 py-3 md:h-16 md:py-0 flex flex-wrap md:flex-nowrap items-center justify-between gap-y-3">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 bg-tech-blue rounded-lg flex items-center justify-center text-white shadow-lg shadow-blue-900/20">
               <Layers size={18} />
@@ -937,7 +988,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-3 md:gap-4 justify-end">
              <div className="hidden md:block text-xs font-medium text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
                 总进度: <span className="text-tech-blue font-bold">{stats.progress}%</span>
              </div>
@@ -946,14 +997,17 @@ export default function App() {
                 <RotateCcw size={18} />
               </button>
             )}
-            {user.role === 'admin' && (
+            {(user.role === 'admin' || user.role === 'sub_admin') && (
               <button onClick={() => setShowAdmin(!showAdmin)} className="px-3 py-1.5 text-xs font-semibold rounded-full border border-slate-200 bg-white hover:bg-slate-50">
-                {showAdmin ? '返回进度' : '管理员后台'}
+                {showAdmin ? '返回进度' : (user.role === 'admin' ? '管理员后台' : '操作记录')}
               </button>
             )}
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 min-w-0">
               <Avatar seed={avatarSeed} name={user.name} />
-              <button onClick={() => setShowPasswordModal(true)} className="text-sm font-medium text-slate-700 hover:text-tech-blue">
+              <button
+                onClick={() => setShowPasswordModal(true)}
+                className="text-sm font-medium text-slate-700 hover:text-tech-blue max-w-[180px] sm:max-w-[240px] md:max-w-none truncate"
+              >
                 {user.name} · {user.group}
               </button>
               <button onClick={handleLogout} className="text-xs text-slate-400 hover:text-slate-600">退出</button>
@@ -968,7 +1022,7 @@ export default function App() {
       {/* --- Main Content --- */}
       <main className="w-full max-w-[98%] xl:max-w-[2000px] mx-auto px-6 py-10">
         {showAdmin ? (
-          <AdminPanel token={token || ''} apiRequest={apiRequest} />
+          <AdminPanel token={token || ''} apiRequest={apiRequest} role={user?.role || 'user'} />
         ) : (
         <>
           {/* --- Dashboard Stats --- */}
@@ -1210,20 +1264,20 @@ export default function App() {
                       <div key={task.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden hover:shadow-lg transition-all duration-300 group">
                       {/* Group Header */}
                       <div className="p-6 border-b border-slate-100 bg-slate-50/80 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                         <div className="flex items-center gap-3">
+                         <div className="flex flex-wrap items-center gap-3 min-w-0">
                            <div className="w-1.5 h-6 bg-tech-blue rounded-full"></div>
-                           <h3 className="text-lg font-bold text-slate-800">{task.title}</h3>
+                           <h3 className="text-lg font-bold text-slate-800 min-w-0 break-words">{task.title}</h3>
                            <button 
                             onClick={() => openAddTask(phase.id, task.id)}
-                            className="flex items-center gap-1.5 px-2.5 py-1 text-tech-blue text-xs rounded-lg bg-blue-50 hover:bg-blue-100 border border-blue-200 transition-colors"
+                            className="flex items-center gap-1.5 px-2.5 py-1 text-tech-blue text-xs rounded-lg bg-blue-50 hover:bg-blue-100 border border-blue-200 transition-colors shrink-0"
                            >
                              <Plus size={12} />
                              <span>添加任务</span>
                            </button>
-                           <button onClick={() => openEditGroup(phase.id, task.id, task.title, task.dateRange)} className="p-1.5 text-slate-400 hover:text-tech-blue hover:bg-white rounded-md transition-colors opacity-0 group-hover:opacity-100" title="修改组名">
+                           <button onClick={() => openEditGroup(phase.id, task.id, task.title, task.dateRange)} className="p-1.5 text-slate-400 hover:text-tech-blue hover:bg-white rounded-md transition-colors opacity-0 group-hover:opacity-100 shrink-0" title="修改组名">
                               <Edit2 size={14} />
                            </button>
-                           <button onClick={() => handleDeleteGroup(phase.id, task.id)} className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-white rounded-md transition-colors opacity-0 group-hover:opacity-100" title="删除分组">
+                           <button onClick={() => handleDeleteGroup(phase.id, task.id)} className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-white rounded-md transition-colors opacity-0 group-hover:opacity-100 shrink-0" title="删除分组">
                               <Trash2 size={14} />
                            </button>
                          </div>
@@ -1243,67 +1297,87 @@ export default function App() {
                             <div className="col-span-2">责任组</div>
                             <div className="col-span-2">责任人</div>
                             <div className="col-span-2">截止时间</div>
-                            <div className="col-span-2 text-center">状态</div>
+                            <div className="col-span-1 text-center">状态</div>
+                            <div className="col-span-1 text-right">操作</div>
                         </div>
 
                         {visibleSubTasks.map((subTask) => {
                           const { group, name } = getOwnerInfo(subTask.owner);
                           return (
                             <div key={subTask.id} className="p-6 grid grid-cols-1 md:grid-cols-12 gap-4 items-center hover:bg-blue-50/30 transition-colors group/row relative">
-                                
-                                {/* Row Actions */}
-                                <div className="absolute right-2 top-2 md:top-auto md:right-2 flex items-center gap-1 opacity-0 group-hover/row:opacity-100 transition-opacity">
-                                  <button 
-                                    onClick={() => openEditTask(phase.id, task.id, subTask)}
-                                    className="p-2 text-slate-300 hover:text-tech-blue"
-                                    title="编辑任务"
-                                  >
-                                    <Edit2 size={14} />
-                                  </button>
-                                  <button 
-                                    onClick={() => handleDeleteTask(phase.id, task.id, subTask.id)}
-                                    className="p-2 text-slate-300 hover:text-red-500"
-                                    title="删除任务"
-                                  >
-                                    <Trash2 size={14} />
-                                  </button>
-                                </div>
 
                                 {/* Column 1: Description */}
-                                <div className="md:col-span-4 pr-4">
-                                    <div className="flex items-start gap-3">
+                                <div className="md:col-span-4 pr-4 min-w-0">
+                                    <div className="flex items-start gap-3 min-w-0">
                                         <StatusDot status={subTask.status} animated className="mt-1.5 w-3.5 h-3.5 shrink-0 ring-2 ring-white/80" />
                                         <p className="text-base font-medium text-slate-700 leading-relaxed">{subTask.description}</p>
                                     </div>
                                 </div>
                                 
                                 {/* Column 2: Group */}
-                                <div className="md:col-span-2 flex items-center gap-2 text-sm text-slate-600">
+                                <div className="md:col-span-2 flex items-center gap-2 text-sm text-slate-600 min-w-0">
                                     <span className="md:hidden text-xs font-bold text-slate-400 bg-slate-100 px-1.5 rounded">组别:</span>
                                     <Briefcase size={14} className="text-slate-400 hidden md:block" />
-                                    <span>{group}</span>
+                                    <span className="break-words">{group}</span>
                                 </div>
 
                                 {/* Column 3: Person */}
-                                <div className="md:col-span-2 flex items-center gap-2 text-sm text-slate-600">
+                                <div className="md:col-span-2 flex items-center gap-2 text-sm text-slate-600 min-w-0">
                                     <span className="md:hidden text-xs font-bold text-slate-400 bg-slate-100 px-1.5 rounded">责任人:</span>
                                     <Users size={14} className="text-slate-400 hidden md:block" />
-                                    <span className="truncate" title={name}>{name}</span>
+                                    <span className="break-words">{name}</span>
                                 </div>
 
                                 {/* Column 4: Deadline (Separate Column) */}
-                                <div className="md:col-span-2 flex items-center gap-2 text-sm text-slate-600">
+                                <div className="md:col-span-2 flex items-center gap-2 text-sm text-slate-600 min-w-0">
                                     <span className="md:hidden text-xs font-bold text-slate-400 bg-slate-100 px-1.5 rounded">截止:</span>
                                     <Calendar size={14} className="text-slate-400 hidden md:block" />
                                     <span className="font-mono">{formatDeadline(subTask.deadline)}</span>
                                 </div>
 
                                 {/* Column 5: Status */}
-                                <div className="md:col-span-2">
+                                <div className="md:col-span-1 flex md:justify-center">
                                     <StatusSelect 
                                         status={subTask.status} 
-                                        onChange={(s) => updateStatus(phase.id, task.id, subTask.id, s)} 
+                                        onChange={(s) => updateStatus(phase.id, task.id, subTask.id, s)}
+                                        allowComplete={user?.role === 'admin' || user?.role === 'sub_admin'}
                                     />
+                                </div>
+
+                                {/* Actions */}
+                                <div className="md:col-span-1 flex items-center md:justify-end">
+                                    <span className="md:hidden text-xs font-bold text-slate-400 bg-slate-100 px-1.5 rounded mr-2">操作:</span>
+                                    <div className="relative" data-action-menu>
+                                      <button
+                                        onClick={() => setOpenActionId(openActionId === subTask.id ? null : subTask.id)}
+                                        className="p-2 text-slate-300 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+                                        aria-label="任务操作"
+                                      >
+                                        <MoreVertical size={16} />
+                                      </button>
+                                      {openActionId === subTask.id && (
+                                        <div className="absolute right-0 mt-2 w-28 rounded-lg border border-slate-200 bg-white shadow-lg z-20 overflow-hidden">
+                                          <button
+                                            onClick={() => {
+                                              openEditTask(phase.id, task.id, subTask);
+                                              setOpenActionId(null);
+                                            }}
+                                            className="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                                          >
+                                            编辑
+                                          </button>
+                                          <button
+                                            onClick={() => {
+                                              handleDeleteTask(phase.id, task.id, subTask.id);
+                                              setOpenActionId(null);
+                                            }}
+                                            className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50"
+                                          >
+                                            删除
+                                          </button>
+                                        </div>
+                                      )}
+                                    </div>
                                 </div>
                             </div>
                           );

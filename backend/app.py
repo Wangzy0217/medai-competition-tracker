@@ -1,5 +1,6 @@
 import os
 from functools import wraps
+from typing import Callable
 from uuid import uuid4
 
 from flask import Flask, jsonify, request
@@ -113,6 +114,102 @@ def create_app():
             return fn(user, *args, **kwargs)
         return wrapper
 
+    def require_admin_or_sub_admin(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            user = get_current_user()
+            if not user or user.role not in {"admin", "sub_admin"}:
+                return jsonify({"error": "forbidden"}), 403
+            return fn(user, *args, **kwargs)
+        return wrapper
+
+    def short_text(value: object | None, limit: int = 80) -> str:
+        if value is None:
+            return ""
+        text = str(value)
+        return text if len(text) <= limit else f"{text[:limit]}..."
+
+    def display_value(value: object | None) -> str:
+        if value is None:
+            return "空"
+        text = str(value).strip()
+        if not text:
+            return "空"
+        return short_text(text)
+
+    def status_text(value: object | None) -> str:
+        if value is None:
+            return "空"
+        raw = str(value).strip()
+        if not raw:
+            return "空"
+        upper = raw.upper()
+        return STATUS_LABELS.get(upper, raw)
+
+    def role_text(value: object | None) -> str:
+        if value is None:
+            return "空"
+        raw = str(value).strip()
+        if not raw:
+            return "空"
+        return ROLE_LABELS.get(raw, raw)
+
+    def format_change(
+        label: str,
+        before: object | None,
+        after: object | None,
+        formatter: Callable[[object | None], str] | None = None,
+    ) -> str | None:
+        if before == after:
+            return None
+        fmt = formatter or display_value
+        return f"{label}由{fmt(before)}改为{fmt(after)}"
+
+    def task_context(sub_task: SubTask) -> str:
+        main_task = sub_task.main_task
+        phase = main_task.phase if main_task else None
+        parts: list[str] = []
+        if phase:
+            parts.append(f"阶段【{short_text(phase.title)}】")
+        if main_task:
+            parts.append(f"分组【{short_text(main_task.title)}】")
+        parts.append(f"任务【{short_text(sub_task.description)}】")
+        return " ".join(parts)
+
+    def can_mark_completed(user: User) -> bool:
+        return user.role in {"admin", "sub_admin"}
+
+    ACTION_LABELS = {
+        "register": "注册",
+        "login": "登录",
+        "change_password": "修改密码",
+        "admin_update_user": "更新用户",
+        "create_phase": "新增阶段",
+        "update_phase": "更新阶段",
+        "delete_phase": "删除阶段",
+        "create_group": "新增分组",
+        "update_group": "更新分组",
+        "delete_group": "删除分组",
+        "create_task": "新增任务",
+        "update_task": "更新任务",
+        "delete_task": "删除任务",
+        "reset_data": "重置数据",
+    }
+
+    STATUS_LABELS = {
+        "PENDING": "未开始",
+        "IN_PROGRESS": "进行中",
+        "WARNING": "即将逾期",
+        "COMPLETED": "已完成",
+        "RISK": "已逾期",
+    }
+
+    ROLE_LABELS = {
+        "admin": "管理员",
+        "sub_admin": "子管理员",
+        "user": "普通用户",
+    }
+
     def log_action(user: User | None, action: str, details: str | None = None):
         log = AuditLog(
             user_id=user.id if user else None,
@@ -149,7 +246,11 @@ def create_app():
         )
         db.session.add(user)
         db.session.commit()
-        log_action(user, "register", f"phone={phone}")
+        log_action(
+            user,
+            "register",
+            f"注册账号：姓名【{short_text(name)}】，手机号【{phone}】，组别【{short_text(group_name)}】，职务【{short_text(role_title)}】",
+        )
         return jsonify({"token": create_token(user), "user": serialize_user(user)})
 
     @app.post("/api/auth/login")
@@ -162,7 +263,7 @@ def create_app():
         user = User.query.filter_by(phone=phone).first()
         if not user or not check_password_hash(user.password_hash, password):
             return jsonify({"error": "invalid credentials"}), 401
-        log_action(user, "login", None)
+        log_action(user, "login", f"登录账号：手机号【{user.phone}】")
         return jsonify({"token": create_token(user), "user": serialize_user(user)})
 
     @app.post("/api/auth/change-password")
@@ -177,7 +278,7 @@ def create_app():
             return jsonify({"error": "invalid password"}), 400
         user.password_hash = generate_password_hash(new_password)
         db.session.commit()
-        log_action(user, "change_password", None)
+        log_action(user, "change_password", "修改自己的密码")
         return jsonify({"ok": True})
 
     @app.get("/api/auth/me")
@@ -196,6 +297,13 @@ def create_app():
     def update_user(admin_user: User, user_id: int):
         payload = request.get_json(force=True)
         user = User.query.get_or_404(user_id)
+        before = {
+            "name": user.name,
+            "phone": user.phone,
+            "group_name": user.group_name,
+            "role_title": user.role_title,
+            "role": user.role,
+        }
         if "name" in payload:
             user.name = payload["name"]
         if "phone" in payload:
@@ -209,11 +317,25 @@ def create_app():
         if "password" in payload and payload["password"]:
             user.password_hash = generate_password_hash(payload["password"])
         db.session.commit()
-        log_action(admin_user, "admin_update_user", f"user_id={user.id}")
+        changes = [
+            format_change("姓名", before["name"], user.name),
+            format_change("手机号", before["phone"], user.phone),
+            format_change("组别", before["group_name"], user.group_name),
+            format_change("职务", before["role_title"], user.role_title),
+            format_change("角色", before["role"], user.role, role_text),
+        ]
+        if "password" in payload and payload["password"]:
+            changes.append("重置密码")
+        detail = "；".join([c for c in changes if c]) or "无变更"
+        log_action(
+            admin_user,
+            "admin_update_user",
+            f"更新用户【{short_text(user.name)} / {user.phone}】：{detail}",
+        )
         return jsonify({"ok": True})
 
     @app.get("/api/admin/logs")
-    @require_admin
+    @require_admin_or_sub_admin
     def list_logs(admin_user: User):
         logs = AuditLog.query.order_by(AuditLog.created_at.desc()).limit(200).all()
         return jsonify([
@@ -221,6 +343,7 @@ def create_app():
                 "id": l.id,
                 "userName": l.user_name,
                 "action": l.action,
+                "actionLabel": ACTION_LABELS.get(l.action, l.action),
                 "details": l.details,
                 "createdAt": l.created_at.isoformat() if l.created_at else None,
             }
@@ -249,7 +372,11 @@ def create_app():
         )
         db.session.add(phase)
         db.session.commit()
-        log_action(user, "create_phase", f"phase_id={phase.id}")
+        log_action(
+            user,
+            "create_phase",
+            f"新增阶段【{short_text(phase.title)}】，时间【{phase.date_range}】",
+        )
         emit_update()
         return jsonify({"id": phase.id})
 
@@ -258,6 +385,11 @@ def create_app():
     def update_phase(user: User, phase_id):
         payload = request.get_json(force=True)
         phase = Phase.query.get_or_404(phase_id)
+        before = {
+            "title": phase.title,
+            "date_range": phase.date_range,
+            "order_index": phase.order_index,
+        }
         if "title" in payload:
             phase.title = payload["title"]
         if "dateRange" in payload:
@@ -265,7 +397,17 @@ def create_app():
         if "orderIndex" in payload:
             phase.order_index = payload["orderIndex"]
         db.session.commit()
-        log_action(user, "update_phase", f"phase_id={phase.id}")
+        changes = [
+            format_change("标题", before["title"], phase.title),
+            format_change("时间", before["date_range"], phase.date_range),
+            format_change("顺序", before["order_index"], phase.order_index),
+        ]
+        detail = "；".join([c for c in changes if c]) or "无变更"
+        log_action(
+            user,
+            "update_phase",
+            f"更新阶段【{short_text(phase.title)}】：{detail}",
+        )
         emit_update()
         return jsonify({"ok": True})
 
@@ -273,9 +415,10 @@ def create_app():
     @require_auth
     def delete_phase(user: User, phase_id):
         phase = Phase.query.get_or_404(phase_id)
+        detail = f"删除阶段【{short_text(phase.title)}】，时间【{phase.date_range}】"
         db.session.delete(phase)
         db.session.commit()
-        log_action(user, "delete_phase", f"phase_id={phase.id}")
+        log_action(user, "delete_phase", detail)
         emit_update()
         return jsonify({"ok": True})
 
@@ -300,7 +443,15 @@ def create_app():
         )
         db.session.add(main_task)
         db.session.commit()
-        log_action(user, "create_group", f"main_task_id={main_task.id}")
+        phase = Phase.query.get(phase_id)
+        log_action(
+            user,
+            "create_group",
+            (
+                f"新增分组【{short_text(main_task.title)}】"
+                f"{f'（阶段【{short_text(phase.title)}】）' if phase else ''}，时间【{main_task.date_range}】"
+            ),
+        )
         emit_update()
         return jsonify({"id": main_task.id})
 
@@ -309,6 +460,12 @@ def create_app():
     def update_main_task(user: User, main_task_id):
         payload = request.get_json(force=True)
         main_task = MainTask.query.get_or_404(main_task_id)
+        before = {
+            "title": main_task.title,
+            "date_range": main_task.date_range,
+            "phase_id": main_task.phase_id,
+            "order_index": main_task.order_index,
+        }
         if "title" in payload:
             main_task.title = payload["title"]
         if "dateRange" in payload:
@@ -318,7 +475,27 @@ def create_app():
         if "orderIndex" in payload:
             main_task.order_index = payload["orderIndex"]
         db.session.commit()
-        log_action(user, "update_group", f"main_task_id={main_task.id}")
+        before_phase = Phase.query.get(before["phase_id"]) if before["phase_id"] else None
+        after_phase = Phase.query.get(main_task.phase_id) if main_task.phase_id else None
+        changes = [
+            format_change("标题", before["title"], main_task.title),
+            format_change("时间", before["date_range"], main_task.date_range),
+            format_change(
+                "阶段",
+                before_phase.title if before_phase else None,
+                after_phase.title if after_phase else None,
+            ),
+            format_change("顺序", before["order_index"], main_task.order_index),
+        ]
+        detail = "；".join([c for c in changes if c]) or "无变更"
+        log_action(
+            user,
+            "update_group",
+            (
+                f"更新分组【{short_text(main_task.title)}】"
+                f"{f'（阶段【{short_text(after_phase.title)}】）' if after_phase else ''}：{detail}"
+            ),
+        )
         emit_update()
         return jsonify({"ok": True})
 
@@ -326,9 +503,14 @@ def create_app():
     @require_auth
     def delete_main_task(user: User, main_task_id):
         main_task = MainTask.query.get_or_404(main_task_id)
+        phase = Phase.query.get(main_task.phase_id)
+        detail = (
+            f"删除分组【{short_text(main_task.title)}】"
+            f"{f'（阶段【{short_text(phase.title)}】）' if phase else ''}，时间【{main_task.date_range}】"
+        )
         db.session.delete(main_task)
         db.session.commit()
-        log_action(user, "delete_group", f"main_task_id={main_task.id}")
+        log_action(user, "delete_group", detail)
         emit_update()
         return jsonify({"ok": True})
 
@@ -343,6 +525,8 @@ def create_app():
         status = normalize_status(payload.get("status", "PENDING"))
         if status not in valid_statuses:
             return jsonify({"error": "invalid status", "received": status}), 400
+        if status == "COMPLETED" and not can_mark_completed(user):
+            return jsonify({"error": "forbidden"}), 403
         if not main_task_id or not description or not owner or not deadline:
             return jsonify({"error": "mainTaskId, description, owner, deadline are required"}), 400
         order_index = payload.get(
@@ -359,7 +543,14 @@ def create_app():
         )
         db.session.add(sub_task)
         db.session.commit()
-        log_action(user, "create_task", f"sub_task_id={sub_task.id}")
+        log_action(
+            user,
+            "create_task",
+            (
+                f"新增任务：{task_context(sub_task)}，"
+                f"责任【{short_text(owner)}】，截止【{deadline}】，状态【{status_text(status)}】"
+            ),
+        )
         emit_update()
         return jsonify({"id": sub_task.id})
 
@@ -368,6 +559,13 @@ def create_app():
     def update_sub_task(user: User, sub_task_id):
         payload = request.get_json(force=True)
         sub_task = SubTask.query.get_or_404(sub_task_id)
+        before = {
+            "description": sub_task.description,
+            "owner": sub_task.owner,
+            "deadline": sub_task.deadline,
+            "status": sub_task.status,
+            "order_index": sub_task.order_index,
+        }
         if "description" in payload:
             sub_task.description = payload["description"]
         if "owner" in payload:
@@ -378,11 +576,25 @@ def create_app():
             status = normalize_status(payload["status"])
             if status not in valid_statuses:
                 return jsonify({"error": "invalid status", "received": status}), 400
+            if status == "COMPLETED" and not can_mark_completed(user):
+                return jsonify({"error": "forbidden"}), 403
             sub_task.status = status
         if "orderIndex" in payload:
             sub_task.order_index = payload["orderIndex"]
         db.session.commit()
-        log_action(user, "update_task", f"sub_task_id={sub_task.id}")
+        changes = [
+            format_change("描述", before["description"], sub_task.description),
+            format_change("责任", before["owner"], sub_task.owner),
+            format_change("截止", before["deadline"], sub_task.deadline),
+            format_change("状态", before["status"], sub_task.status, status_text),
+            format_change("顺序", before["order_index"], sub_task.order_index),
+        ]
+        detail = "；".join([c for c in changes if c]) or "无变更"
+        log_action(
+            user,
+            "update_task",
+            f"更新任务：{task_context(sub_task)}；{detail}",
+        )
         emit_update()
         return jsonify({"ok": True})
 
@@ -390,9 +602,15 @@ def create_app():
     @require_auth
     def delete_sub_task(user: User, sub_task_id):
         sub_task = SubTask.query.get_or_404(sub_task_id)
+        detail = (
+            f"删除任务：{task_context(sub_task)}，"
+            f"责任【{short_text(sub_task.owner)}】，"
+            f"截止【{sub_task.deadline}】，"
+            f"状态【{status_text(sub_task.status)}】"
+        )
         db.session.delete(sub_task)
         db.session.commit()
-        log_action(user, "delete_task", f"sub_task_id={sub_task.id}")
+        log_action(user, "delete_task", detail)
         emit_update()
         return jsonify({"ok": True})
 
@@ -404,7 +622,7 @@ def create_app():
         Phase.query.delete()
         db.session.commit()
         seed_if_empty()
-        log_action(admin_user, "reset_data", None)
+        log_action(admin_user, "reset_data", "重置所有阶段/分组/任务数据")
         emit_update()
         return jsonify({"ok": True})
 
