@@ -8,41 +8,95 @@ import {
 import { io } from 'socket.io-client';
 
 // --- Modals & Helper Components ---
+const SELECTABLE_STATUS_ORDER: Status[] = [
+  Status.PENDING,
+  Status.IN_PROGRESS,
+  Status.COMPLETED
+];
+
+const GROUP_OPTIONS = [
+  '组委会办公室',
+  '数据收集与标注组',
+  '专家工作组',
+  '技术环境保障组',
+  '宣传工作组',
+  '赛事运行和大型活动组',
+  '服务保障组',
+  '监督与法务组',
+  '外事工作组',
+  '成果转化组'
+];
+
+const DEFAULT_EXPORT_STATUS_SELECTION: Record<Status, boolean> = {
+  [Status.PENDING]: true,
+  [Status.IN_PROGRESS]: true,
+  [Status.WARNING]: true,
+  [Status.REVIEWING]: true,
+  [Status.RISK]: true,
+  [Status.COMPLETED]: true,
+};
 
 const StatusSelect = ({
   status,
   onChange,
-  allowComplete = true
+  showWithdraw = false,
+  onWithdraw
 }: {
   status: Status;
   onChange: (s: Status) => void;
-  allowComplete?: boolean;
+  showWithdraw?: boolean;
+  onWithdraw?: () => void;
 }) => {
   const config = STATUS_CONFIG[status];
+  const isSystemStatus = status === Status.WARNING || status === Status.RISK || status === Status.REVIEWING;
+  const isReadOnly = showWithdraw || status === Status.REVIEWING;
+  const selectValue = isSystemStatus ? '__SYSTEM__' : status;
   return (
     <div className="relative inline-block group w-full min-w-[120px] max-w-[160px]">
       <select
-        value={status}
-        onChange={(e) => onChange(e.target.value as Status)}
+        value={selectValue}
+        disabled={isReadOnly}
+        onChange={(e) => {
+          if (e.target.value === '__SYSTEM__') return;
+          onChange(e.target.value as Status);
+        }}
         className={`
           w-full appearance-none cursor-pointer pl-3 pr-8 py-2 rounded-lg text-xs font-bold border transition-all duration-200
           focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-blue-500/50
+          ${isReadOnly ? 'pointer-events-none' : ''}
           ${config.color}
         `}
       >
-        {STATUS_ORDER.map((key) => {
+        {isSystemStatus && (
+          <option value="__SYSTEM__" disabled>
+            {config.label}
+          </option>
+        )}
+        {SELECTABLE_STATUS_ORDER.map((key) => {
           const conf = STATUS_CONFIG[key];
-          const disabled = key === 'COMPLETED' && !allowComplete;
           return (
-            <option key={key} value={key} disabled={disabled}>
+            <option key={key} value={key}>
               {conf.label}
             </option>
           );
         })}
       </select>
-      <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none opacity-50">
-        <ChevronDown size={14} />
-      </div>
+      {!isReadOnly && (
+        <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none opacity-50">
+          <ChevronDown size={14} />
+        </div>
+      )}
+      {showWithdraw && (
+        <div className="absolute inset-0 rounded-lg bg-white/85 opacity-0 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 transition-opacity duration-200 flex items-center justify-center">
+          <button
+            type="button"
+            onClick={onWithdraw}
+            className="w-full h-full rounded-lg text-xs font-bold text-slate-700 hover:text-orange-700 transition-colors"
+          >
+            撤回
+          </button>
+        </div>
+      )}
     </div>
   );
 };
@@ -116,6 +170,35 @@ type UserInfo = {
   role: 'admin' | 'sub_admin' | 'user';
 };
 
+type PendingReviewItem = {
+  subTaskId: string;
+  phaseTitle: string;
+  mainTaskTitle: string;
+  description: string;
+  owner: string;
+  deadline: string;
+  status: Status;
+  reviewFromStatus: Status;
+  reviewFromLabel: string;
+  applicantName: string;
+  applicantGroup: string;
+  requestedAt: string;
+};
+
+type ReviewResultItem = {
+  id: number;
+  subTaskId: string;
+  phaseTitle: string;
+  mainTaskTitle: string;
+  description: string;
+  owner: string;
+  deadline: string;
+  decision: 'approve' | 'reject';
+  decisionLabel: string;
+  reviewerName: string;
+  reviewedAt: string;
+};
+
 const Avatar = ({ seed, name }: { seed: string; name: string }) => {
   const colors = ['#1f7ae0', '#12a150', '#f97316', '#e11d48', '#7c3aed', '#0ea5e9'];
   const idx = seed.charCodeAt(0) % colors.length;
@@ -138,19 +221,7 @@ const AuthCard = ({
 }) => {
   const [tab, setTab] = useState<'login' | 'register'>('login');
   const [loginForm, setLoginForm] = useState({ phone: '', password: '' });
-  const groupOptions = [
-    '组委会办公室',
-    '数据收集与标注组',
-    '专家工作组',
-    '技术环境保障组',
-    '宣传工作组',
-    '赛事运行和大型活动组',
-    '服务保障组',
-    '监督与法务组',
-    '外事工作组',
-    '成果转化组'
-  ];
-  const [regForm, setRegForm] = useState({ name: '', phone: '', group: groupOptions[0], roleTitle: '', password: '' });
+  const [regForm, setRegForm] = useState({ name: '', phone: '', group: GROUP_OPTIONS[0], roleTitle: '', password: '' });
 
   return (
     <div className="bg-white/55 backdrop-blur-2xl rounded-2xl border border-white/60 shadow-[0_18px_50px_rgba(15,23,42,0.18)] p-6 w-full max-w-md">
@@ -224,7 +295,7 @@ const AuthCard = ({
                 value={regForm.group}
                 onChange={e => setRegForm({ ...regForm, group: e.target.value })}
               >
-                {groupOptions.map((g) => (
+                {GROUP_OPTIONS.map((g) => (
                   <option key={g} value={g}>{g}</option>
                 ))}
               </select>
@@ -273,8 +344,18 @@ const AdminPanel = ({
   const [logs, setLogs] = useState<any[]>([]);
   const [editUser, setEditUser] = useState<UserInfo | null>(null);
   const [editForm, setEditForm] = useState({ name: '', phone: '', group: '', roleTitle: '', role: 'user', password: '' });
+  const [showCreateUserModal, setShowCreateUserModal] = useState(false);
+  const [createForm, setCreateForm] = useState<{ name: string; phone: string; group: string; roleTitle: string; role: UserInfo['role'] }>({
+    name: '',
+    phone: '',
+    group: GROUP_OPTIONS[0],
+    roleTitle: '',
+    role: 'user',
+  });
+  const [creatingUser, setCreatingUser] = useState(false);
   const canManageUsers = role === 'admin';
   const canViewLogs = role === 'admin' || role === 'sub_admin';
+  const adminGroupOptions = Array.from(new Set([...GROUP_OPTIONS, ...users.map((u) => u.group).filter(Boolean)]));
 
   const loadAdmin = useCallback(async () => {
     if (canManageUsers) {
@@ -310,11 +391,52 @@ const AdminPanel = ({
     await loadAdmin();
   };
 
+  const openCreateUserModal = () => {
+    setCreateForm({
+      name: '',
+      phone: '',
+      group: adminGroupOptions[0] || GROUP_OPTIONS[0],
+      roleTitle: '',
+      role: 'user',
+    });
+    setShowCreateUserModal(true);
+  };
+
+  const submitCreateUser = async () => {
+    if (!createForm.name || !createForm.phone || !createForm.group || !createForm.roleTitle) {
+      alert('请完整填写姓名、手机号、组别、职务和角色');
+      return;
+    }
+    setCreatingUser(true);
+    try {
+      await apiRequest('/api/admin/users', {
+        method: 'POST',
+        body: JSON.stringify(createForm),
+      });
+      setShowCreateUserModal(false);
+      await loadAdmin();
+      alert('新增成员成功，初始密码为 123456');
+    } catch (e) {
+      const message = e instanceof Error ? e.message : '未知错误';
+      alert(`新增成员失败：${message}`);
+    } finally {
+      setCreatingUser(false);
+    }
+  };
+
   return (
     <div className="space-y-8">
       {canManageUsers && (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
-          <h2 className="text-lg font-bold text-slate-800 mb-4">用户管理</h2>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h2 className="text-lg font-bold text-slate-800">用户管理</h2>
+            <button
+              onClick={openCreateUserModal}
+              className="px-3 py-1.5 text-sm font-semibold rounded-lg bg-tech-blue text-white hover:bg-blue-900 transition-colors"
+            >
+              新增成员
+            </button>
+          </div>
           <div className="overflow-auto">
             <table className="min-w-full text-sm">
               <thead className="text-slate-500">
@@ -359,6 +481,51 @@ const AdminPanel = ({
             ))}
           </div>
         </div>
+      )}
+
+      {canManageUsers && (
+        <Modal isOpen={showCreateUserModal} onClose={() => setShowCreateUserModal(false)} title="新增成员">
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">姓名</label>
+                <input className="w-full px-3 py-2 border border-slate-300 rounded-lg" value={createForm.name} onChange={e => setCreateForm({ ...createForm, name: e.target.value })} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">手机号</label>
+                <input className="w-full px-3 py-2 border border-slate-300 rounded-lg" value={createForm.phone} onChange={e => setCreateForm({ ...createForm, phone: e.target.value })} />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">组别</label>
+                <select className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white" value={createForm.group} onChange={e => setCreateForm({ ...createForm, group: e.target.value })}>
+                  {adminGroupOptions.map((g) => (
+                    <option key={g} value={g}>{g}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">组内职务</label>
+                <input className="w-full px-3 py-2 border border-slate-300 rounded-lg" value={createForm.roleTitle} onChange={e => setCreateForm({ ...createForm, roleTitle: e.target.value })} />
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">角色</label>
+              <select className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white" value={createForm.role} onChange={e => setCreateForm({ ...createForm, role: e.target.value as UserInfo['role'] })}>
+                <option value="user">用户</option>
+                <option value="sub_admin">子管理员</option>
+                <option value="admin">管理员</option>
+              </select>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+              新成员初始密码默认为 123456，可在“编辑用户”中重置。
+            </div>
+            <button onClick={submitCreateUser} disabled={creatingUser} className="w-full bg-tech-blue text-white font-bold py-2.5 rounded-lg hover:bg-blue-900 transition-colors disabled:opacity-60">
+              {creatingUser ? '创建中...' : '确认新增'}
+            </button>
+          </div>
+        </Modal>
       )}
 
       {canManageUsers && (
@@ -410,11 +577,23 @@ const AdminPanel = ({
 
 // --- Modals ---
 
-const Modal = ({ isOpen, onClose, title, children }: { isOpen: boolean; onClose: () => void; title: string; children: React.ReactNode }) => {
+const Modal = ({
+  isOpen,
+  onClose,
+  title,
+  children,
+  maxWidthClass = 'max-w-lg',
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  title: string;
+  children: React.ReactNode;
+  maxWidthClass?: string;
+}) => {
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden transition-all duration-200 transform scale-100 opacity-100">
+      <div className={`bg-white rounded-2xl shadow-2xl w-full ${maxWidthClass} overflow-hidden transition-all duration-200 transform scale-100 opacity-100`}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
           <h3 className="text-lg font-bold text-slate-800">{title}</h3>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1 rounded-full hover:bg-slate-100">
@@ -444,15 +623,24 @@ export default function App() {
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [passwordForm, setPasswordForm] = useState({ oldPassword: '', newPassword: '' });
 
-  const [stats, setStats] = useState({ total: 0, completed: 0, progress: 0, risk: 0, warning: 0, inProgress: 0, pending: 0 });
+  const [stats, setStats] = useState({ total: 0, completed: 0, progress: 0, risk: 0, warning: 0, reviewing: 0, inProgress: 0, pending: 0 });
   const [statusFilter, setStatusFilter] = useState<Status | 'ALL'>('ALL');
+  const [taskScopeFilter, setTaskScopeFilter] = useState<'ALL' | 'MY_GROUP'>('ALL');
+  const [exportStatusSelection, setExportStatusSelection] = useState<Record<Status, boolean>>({ ...DEFAULT_EXPORT_STATUS_SELECTION });
+  const [exportingPdf, setExportingPdf] = useState(false);
   const [activePhaseId, setActivePhaseId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ id: number; type: 'success' | 'error'; message: string } | null>(null);
   const [openActionId, setOpenActionId] = useState<string | null>(null);
+  const [pendingReviews, setPendingReviews] = useState<PendingReviewItem[]>([]);
+  const [reviewResults, setReviewResults] = useState<ReviewResultItem[]>([]);
+  const [reviewResultsSeenAt, setReviewResultsSeenAt] = useState(0);
+  const [reviewActionLoadingId, setReviewActionLoadingId] = useState<string | null>(null);
   
   // Modal States
-  const [activeModal, setActiveModal] = useState<'task' | 'group' | null>(null);
+  const [activeModal, setActiveModal] = useState<'task' | 'group' | 'review-complete' | 'review-center' | 'review-results' | 'export-pdf' | null>(null);
   const [modalTarget, setModalTarget] = useState<{ phaseId: string, mainTaskId?: string, subTaskId?: string, type?: 'add' | 'edit' }>({ phaseId: '' });
+  const [reviewTarget, setReviewTarget] = useState<{ subTaskId: string; fromStatus: Status } | null>(null);
+  const [reviewSubmitting, setReviewSubmitting] = useState(false);
   
   // Form States
   const [taskForm, setTaskForm] = useState({ description: '', group: '', name: '', deadline: '' });
@@ -479,6 +667,42 @@ export default function App() {
     setToast({ id: Date.now(), type, message });
   }, []);
 
+  const fetchPendingReviews = useCallback(async () => {
+    if (!token || !user || (user.role !== 'admin' && user.role !== 'sub_admin')) {
+      setPendingReviews([]);
+      return;
+    }
+    try {
+      const res = await apiRequest('/api/reviews/pending');
+      const payload = await res.json();
+      if (Array.isArray(payload)) {
+        setPendingReviews(payload as PendingReviewItem[]);
+      } else {
+        setPendingReviews([]);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }, [apiRequest, token, user]);
+
+  const fetchReviewResults = useCallback(async () => {
+    if (!token || !user || user.role !== 'user') {
+      setReviewResults([]);
+      return;
+    }
+    try {
+      const res = await apiRequest('/api/reviews/my-results');
+      const payload = await res.json();
+      if (Array.isArray(payload)) {
+        setReviewResults(payload as ReviewResultItem[]);
+      } else {
+        setReviewResults([]);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }, [apiRequest, token, user]);
+
   const fetchData = useCallback(async () => {
     if (!token) return;
     try {
@@ -494,10 +718,7 @@ export default function App() {
     if (!token) return;
     fetchData();
     const socket = io(SOCKET_URL, { transports: ['websocket', 'polling'] });
-    socket.on('data:updated', (payload: Phase[] | null) => {
-      if (Array.isArray(payload)) setData(payload);
-      else fetchData();
-    });
+    socket.on('data:updated', () => fetchData());
     socket.on('connect_error', () => fetchData());
     socket.on('disconnect', () => fetchData());
     return () => socket.disconnect();
@@ -508,6 +729,24 @@ export default function App() {
     const timer = setTimeout(() => setToast(null), 2200);
     return () => clearTimeout(timer);
   }, [toast?.id]);
+
+  useEffect(() => {
+    fetchPendingReviews();
+  }, [fetchPendingReviews, data]);
+
+  useEffect(() => {
+    fetchReviewResults();
+  }, [fetchReviewResults, data]);
+
+  useEffect(() => {
+    if (!user || user.role !== 'user') {
+      setReviewResultsSeenAt(0);
+      return;
+    }
+    const raw = localStorage.getItem(`review-results-seen-at:${user.id}`) || '0';
+    const value = Number(raw);
+    setReviewResultsSeenAt(Number.isFinite(value) ? value : 0);
+  }, [user]);
   
   useEffect(() => {
     const handlePointerDown = (event: PointerEvent) => {
@@ -570,7 +809,7 @@ export default function App() {
   }, [data]);
 
   useEffect(() => {
-    let total = 0, completed = 0, risk = 0, warning = 0, inProgress = 0, pending = 0;
+    let total = 0, completed = 0, risk = 0, warning = 0, reviewing = 0, inProgress = 0, pending = 0;
     data.forEach(phase => {
       phase.mainTasks.forEach(mt => {
         mt.subTasks.forEach(st => {
@@ -578,6 +817,7 @@ export default function App() {
           if (st.status === Status.COMPLETED) completed++;
           if (st.status === Status.RISK) risk++;
           if (st.status === Status.WARNING) warning++;
+          if (st.status === Status.REVIEWING) reviewing++;
           if (st.status === Status.IN_PROGRESS) inProgress++;
           if (st.status === Status.PENDING) pending++;
         });
@@ -590,6 +830,7 @@ export default function App() {
       progress: Math.round(total === 0 ? 0 : (completed / total) * 100),
       risk,
       warning,
+      reviewing,
       inProgress,
       pending
     });
@@ -640,6 +881,18 @@ export default function App() {
     localStorage.removeItem('auth-token');
   };
 
+  const openReviewResultsModal = useCallback(() => {
+    setActiveModal('review-results');
+    if (!user || user.role !== 'user') return;
+    const now = Date.now();
+    setReviewResultsSeenAt(now);
+    localStorage.setItem(`review-results-seen-at:${user.id}`, String(now));
+  }, [user]);
+
+  const openExportModal = () => {
+    setActiveModal('export-pdf');
+  };
+
   const resetData = async () => {
     if (!confirm('确定要重置所有进度到初始状态吗？此操作无法撤销。')) return;
     try {
@@ -661,14 +914,33 @@ export default function App() {
     return match ? (match[0] as Status) : null;
   };
 
-  const updateStatus = useCallback(async (_phaseId: string, _mainTaskId: string, subTaskId: string, newStatus: Status) => {
+  const updateStatus = useCallback(async (
+    _phaseId: string,
+    _mainTaskId: string,
+    subTaskId: string,
+    currentStatus: Status,
+    newStatus: Status
+  ) => {
     try {
       const normalizedStatus = normalizeStatusValue(newStatus);
       if (!normalizedStatus) {
         throw new Error(`invalid status: ${String(newStatus)}`);
       }
-      if (normalizedStatus === 'COMPLETED' && user?.role !== 'admin' && user?.role !== 'sub_admin') {
-        showToast('error', '无权限将状态修改为已完成');
+      if (user?.role === 'user' && currentStatus === Status.REVIEWING && normalizedStatus !== Status.REVIEWING) {
+        showToast('error', '审核中任务请使用“撤回”按钮');
+        return;
+      }
+      if (user?.role === 'user' && normalizedStatus === Status.REVIEWING && currentStatus !== Status.REVIEWING) {
+        showToast('error', '请先选择“已完成”并提交审核');
+        return;
+      }
+      if (user?.role === 'user' && normalizedStatus === Status.COMPLETED) {
+        if (currentStatus === Status.REVIEWING) {
+          showToast('error', '该任务已在审核中');
+          return;
+        }
+        setReviewTarget({ subTaskId, fromStatus: currentStatus });
+        setActiveModal('review-complete');
         return;
       }
       await apiRequest(`/api/sub-tasks/${subTaskId}`, {
@@ -682,6 +954,63 @@ export default function App() {
       showToast('error', `状态切换失败：${message}`);
     }
   }, [apiRequest, fetchData, showToast, user?.role]);
+
+  const submitCompletionReview = useCallback(async () => {
+    if (!reviewTarget) return;
+    setReviewSubmitting(true);
+    try {
+      await apiRequest(`/api/sub-tasks/${reviewTarget.subTaskId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: Status.REVIEWING, submitReview: true }),
+      });
+      await fetchData();
+      await fetchPendingReviews();
+      showToast('success', '已提交完成审核');
+      setReviewTarget(null);
+      setActiveModal(null);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : '未知错误';
+      showToast('error', `提交审核失败：${message}`);
+    } finally {
+      setReviewSubmitting(false);
+    }
+  }, [apiRequest, fetchData, fetchPendingReviews, reviewTarget, showToast]);
+
+  const withdrawCompletionReview = useCallback(async (subTaskId: string) => {
+    if (user?.role === 'user' && !window.confirm('确定要撤回该审核申请吗？')) {
+      return;
+    }
+    try {
+      await apiRequest(`/api/sub-tasks/${subTaskId}/withdraw-review`, {
+        method: 'POST',
+      });
+      await fetchData();
+      await fetchPendingReviews();
+      showToast('success', '已撤回审核申请');
+    } catch (e) {
+      const message = e instanceof Error ? e.message : '未知错误';
+      showToast('error', `撤回失败：${message}`);
+    }
+  }, [apiRequest, fetchData, fetchPendingReviews, showToast, user?.role]);
+
+  const handleReviewDecision = useCallback(async (subTaskId: string, decision: 'approve' | 'reject') => {
+    const loadingKey = `${subTaskId}:${decision}`;
+    setReviewActionLoadingId(loadingKey);
+    try {
+      await apiRequest(`/api/sub-tasks/${subTaskId}/review-decision`, {
+        method: 'POST',
+        body: JSON.stringify({ decision }),
+      });
+      await fetchData();
+      await fetchPendingReviews();
+      showToast('success', decision === 'approve' ? '审核通过成功' : '已驳回审核申请');
+    } catch (e) {
+      const message = e instanceof Error ? e.message : '未知错误';
+      showToast('error', `审核操作失败：${message}`);
+    } finally {
+      setReviewActionLoadingId(null);
+    }
+  }, [apiRequest, fetchData, fetchPendingReviews, showToast]);
 
   const handleDeleteTask = async (_phaseId: string, _mainTaskId: string, subTaskId: string) => {
     if (!confirm('确定删除此任务吗？')) return;
@@ -838,12 +1167,221 @@ export default function App() {
     return `${parsed.year}.${mm}.${dd}`;
   };
 
+  const formatReviewTime = (value: string) => {
+    if (!value) return '未知';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return value;
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    return `${y}.${m}.${day} ${hh}:${mm}`;
+  };
+
+  const selectedExportStatuses = STATUS_ORDER.filter((status) => exportStatusSelection[status]);
+  const exportRows = data.flatMap((phase) =>
+    phase.mainTasks.flatMap((mainTask) =>
+      mainTask.subTasks
+        .filter((subTask) => selectedExportStatuses.includes(subTask.status))
+        .map((subTask) => {
+          const ownerInfo = getOwnerInfo(subTask.owner);
+          return {
+            phaseTitle: phase.title,
+            mainTaskTitle: mainTask.title,
+            description: subTask.description,
+            group: ownerInfo.group,
+            ownerName: ownerInfo.name,
+            deadline: formatDeadline(subTask.deadline),
+            status: subTask.status,
+          };
+        })
+    )
+  );
+
+  const toggleExportStatus = (status: Status) => {
+    setExportStatusSelection((prev) => ({ ...prev, [status]: !prev[status] }));
+  };
+
+  const setAllExportStatuses = (checked: boolean) => {
+    setExportStatusSelection(
+      STATUS_ORDER.reduce((acc, status) => {
+        acc[status] = checked;
+        return acc;
+      }, {} as Record<Status, boolean>)
+    );
+  };
+
+  const escapeHtml = (value: string) =>
+    value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+
+  const exportToPdf = async () => {
+    if (selectedExportStatuses.length === 0) {
+      showToast('error', '请至少选择一个状态');
+      return;
+    }
+    if (exportRows.length === 0) {
+      showToast('error', '当前筛选条件下没有可导出的任务');
+      return;
+    }
+    setExportingPdf(true);
+    const selectedLabels = selectedExportStatuses.map((status) => STATUS_CONFIG[status].label).join('、');
+    const nowForHeader = new Date();
+    const exportDateTitle = `${nowForHeader.getFullYear()}.${String(nowForHeader.getMonth() + 1).padStart(2, '0')}.${String(nowForHeader.getDate()).padStart(2, '0')}`;
+    try {
+      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([import('html2canvas'), import('jspdf')]);
+      const host = document.createElement('div');
+      host.style.position = 'fixed';
+      host.style.left = '-10000px';
+      host.style.top = '0';
+      host.style.width = '1180px';
+      host.style.padding = '28px';
+      host.style.background = '#ffffff';
+      host.style.color = '#0f172a';
+      host.style.fontFamily = '"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
+
+      const tableRowsHtml = exportRows
+        .map(
+          (row, index) => `
+            <tr data-status="${row.status}">
+              <td>${index + 1}</td>
+              <td>${escapeHtml(row.phaseTitle)}</td>
+              <td>${escapeHtml(row.mainTaskTitle)}</td>
+              <td>${escapeHtml(row.description)}</td>
+              <td>${escapeHtml(row.group)}</td>
+              <td>${escapeHtml(row.ownerName)}</td>
+              <td>${escapeHtml(row.deadline)}</td>
+              <td class="pdf-status">${escapeHtml(STATUS_CONFIG[row.status].label)}</td>
+            </tr>
+          `
+        )
+        .join('');
+
+      host.innerHTML = `
+        <style>
+          .pdf-header { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; margin-bottom: 8px; }
+          .pdf-title, .pdf-date { font-size: 28px; font-weight: 700; color: #0f172a; line-height: 1.2; }
+          .pdf-subtitle { font-size: 14px; color: #475569; margin-bottom: 6px; }
+          .pdf-section { margin-top: 18px; }
+          .pdf-badge { display: inline-block; margin-right: 8px; margin-top: 6px; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid transparent; }
+          .pdf-badge[data-status="PENDING"] { background: #f1f5f9; color: #64748b; border-color: #cbd5e1; }
+          .pdf-badge[data-status="IN_PROGRESS"] { background: #e0f2fe; color: #0369a1; border-color: #7dd3fc; }
+          .pdf-badge[data-status="WARNING"] { background: #fef3c7; color: #a16207; border-color: #fcd34d; }
+          .pdf-badge[data-status="RISK"] { background: #ffedd5; color: #c2410c; border-color: #fdba74; }
+          .pdf-badge[data-status="COMPLETED"] { background: #dcfce7; color: #047857; border-color: #86efac; }
+          .pdf-badge[data-status="REVIEWING"] { background: #cffafe; color: #0e7490; border-color: #67e8f9; }
+          table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 12px; }
+          th, td { border: 1px solid #e2e8f0; padding: 8px 10px; font-size: 12px; line-height: 1.5; vertical-align: top; word-break: break-word; }
+          th { background: #f8fafc; color: #334155; font-weight: 700; }
+          tbody tr[data-status="PENDING"] td { color: #64748b; }
+          tbody tr[data-status="IN_PROGRESS"] td { color: #0369a1; }
+          tbody tr[data-status="WARNING"] td { color: #a16207; }
+          tbody tr[data-status="RISK"] td { color: #c2410c; }
+          tbody tr[data-status="COMPLETED"] td { color: #047857; }
+          tbody tr[data-status="REVIEWING"] td { color: #0e7490; }
+          .pdf-status { font-weight: 700; }
+          th:nth-child(1), td:nth-child(1) { width: 44px; text-align: center; }
+          th:nth-child(2), td:nth-child(2) { width: 120px; }
+          th:nth-child(3), td:nth-child(3) { width: 140px; }
+          th:nth-child(4), td:nth-child(4) { width: auto; }
+          th:nth-child(5), td:nth-child(5) { width: 110px; }
+          th:nth-child(6), td:nth-child(6) { width: 90px; }
+          th:nth-child(7), td:nth-child(7) { width: 90px; }
+          th:nth-child(8), td:nth-child(8) { width: 92px; text-align: center; }
+        </style>
+        <div class="pdf-header">
+          <div class="pdf-title">全国医保影像AI识图大赛 进度管理表</div>
+          <div class="pdf-date">${escapeHtml(exportDateTitle)}</div>
+        </div>
+        <div class="pdf-subtitle">状态筛选：${escapeHtml(selectedLabels)}</div>
+        <div class="pdf-subtitle">任务总数：${exportRows.length}</div>
+        <div class="pdf-section">
+          ${selectedExportStatuses.map((status) => `<span class="pdf-badge" data-status="${status}">${escapeHtml(STATUS_CONFIG[status].label)}（${statusCounts[status]}）</span>`).join('')}
+        </div>
+        <div class="pdf-section">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>阶段</th>
+                <th>分组</th>
+                <th>任务描述</th>
+                <th>责任组</th>
+                <th>责任人</th>
+                <th>截止时间</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody>${tableRowsHtml}</tbody>
+          </table>
+        </div>
+      `;
+      document.body.appendChild(host);
+      try {
+        if (document.fonts?.ready) {
+          await document.fonts.ready;
+        }
+        const canvas = await html2canvas(host, { scale: 2, backgroundColor: '#ffffff', useCORS: true, windowWidth: 1280 });
+        const pdf = new jsPDF('p', 'mm', 'a4');
+        const pageWidth = pdf.internal.pageSize.getWidth();
+        const pageHeight = pdf.internal.pageSize.getHeight();
+        const margin = 8;
+        const imageWidth = pageWidth - margin * 2;
+        const imageHeight = (canvas.height * imageWidth) / canvas.width;
+        const usablePageHeight = pageHeight - margin * 2;
+        const imageData = canvas.toDataURL('image/png');
+
+        let heightLeft = imageHeight;
+        let position = margin;
+        pdf.addImage(imageData, 'PNG', margin, position, imageWidth, imageHeight, undefined, 'FAST');
+        heightLeft -= usablePageHeight;
+
+        while (heightLeft > 0) {
+          pdf.addPage();
+          position = margin - (imageHeight - heightLeft);
+          pdf.addImage(imageData, 'PNG', margin, position, imageWidth, imageHeight, undefined, 'FAST');
+          heightLeft -= usablePageHeight;
+        }
+
+        const now = new Date();
+        const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
+        pdf.save(`任务状态导出_${stamp}.pdf`);
+      } finally {
+        document.body.removeChild(host);
+      }
+
+      setActiveModal(null);
+      showToast('success', 'PDF 导出成功');
+    } catch (e) {
+      const message = e instanceof Error ? e.message : '未知错误';
+      showToast('error', `导出失败：${message}`);
+    } finally {
+      setExportingPdf(false);
+    }
+  };
+
   const statusCounts = {
     [Status.PENDING]: stats.pending,
     [Status.IN_PROGRESS]: stats.inProgress,
     [Status.WARNING]: stats.warning,
+    [Status.REVIEWING]: stats.reviewing,
     [Status.RISK]: stats.risk,
     [Status.COMPLETED]: stats.completed
+  };
+  const reviewResultsUnreadCount = user?.role === 'user'
+    ? reviewResults.reduce((count, item) => {
+      const ts = Date.parse(item.reviewedAt);
+      return Number.isFinite(ts) && ts > reviewResultsSeenAt ? count + 1 : count;
+    }, 0)
+    : 0;
+  const matchTaskScope = (owner: string) => {
+    if (taskScopeFilter === 'ALL') return true;
+    return getOwnerInfo(owner).group === user.group;
   };
 
   if (!user) {
@@ -925,7 +1463,7 @@ export default function App() {
           position: absolute;
           inset: 0;
           border-radius: 9999px;
-          background: conic-gradient(#94a3b8, #38bdf8, #fbbf24, #ef4444, #10b981, #94a3b8);
+          background: conic-gradient(#94a3b8, #38bdf8, #fde68a, #f97316, #10b981, #94a3b8);
           animation: ringSpin 10s linear infinite, ringPulse 2.8s ease-in-out infinite;
           filter: saturate(1.2);
         }
@@ -992,14 +1530,16 @@ export default function App() {
              <div className="hidden md:block text-xs font-medium text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
                 总进度: <span className="text-tech-blue font-bold">{stats.progress}%</span>
              </div>
+            <button
+              onClick={openExportModal}
+              className="p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-400 hover:text-slate-600"
+              title="导出 PDF"
+            >
+              <Download size={18} />
+            </button>
             {user.role === 'admin' && (
               <button onClick={resetData} className="p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-400 hover:text-slate-600" title="重置数据">
                 <RotateCcw size={18} />
-              </button>
-            )}
-            {(user.role === 'admin' || user.role === 'sub_admin') && (
-              <button onClick={() => setShowAdmin(!showAdmin)} className="px-3 py-1.5 text-xs font-semibold rounded-full border border-slate-200 bg-white hover:bg-slate-50">
-                {showAdmin ? '返回进度' : (user.role === 'admin' ? '管理员后台' : '操作记录')}
               </button>
             )}
             <div className="flex flex-wrap items-center gap-2 min-w-0">
@@ -1022,19 +1562,86 @@ export default function App() {
       {/* --- Main Content --- */}
       <main className="w-full max-w-[98%] xl:max-w-[2000px] mx-auto px-6 py-10">
         {showAdmin ? (
-          <AdminPanel token={token || ''} apiRequest={apiRequest} role={user?.role || 'user'} />
+          <>
+            {(user.role === 'admin' || user.role === 'sub_admin') && (
+              <div className="mb-6 grid grid-cols-1 lg:grid-cols-5 gap-6 items-center">
+                <div className="lg:col-span-4">
+                  <div className="text-xs uppercase tracking-[0.3em] text-slate-400">Admin Workspace</div>
+                  <h2 className="text-lg font-bold text-slate-800 mt-1">后台管理视图</h2>
+                </div>
+                <div className="lg:col-span-1 w-full flex items-center gap-2">
+                  <button
+                    onClick={() => setShowAdmin(false)}
+                    className="flex-1 min-w-0 h-10 px-3 text-xs font-semibold rounded-xl border border-slate-200 bg-white hover:bg-slate-50"
+                  >
+                    返回进度
+                  </button>
+                  <button
+                    onClick={() => setActiveModal('review-center')}
+                    className="relative flex-1 min-w-0 h-10 px-3 text-xs font-semibold rounded-xl border border-slate-200 bg-white hover:bg-slate-50"
+                  >
+                    审核中心
+                    {pendingReviews.length > 0 && (
+                      <span className="absolute -top-1.5 -right-1.5 min-w-5 h-5 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none flex items-center justify-center">
+                        {pendingReviews.length > 99 ? '99+' : pendingReviews.length}
+                      </span>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+            <AdminPanel token={token || ''} apiRequest={apiRequest} role={user?.role || 'user'} />
+          </>
         ) : (
         <>
           {/* --- Dashboard Stats --- */}
-          <div className="mb-6 flex items-center gap-3">
-            <div className="relative w-10 h-10">
-              <div className="five-color-ring" />
-              <div className="five-color-core" />
+          <div className="mb-6 grid grid-cols-1 lg:grid-cols-5 gap-6 items-center">
+            <div className={`${(user.role === 'admin' || user.role === 'sub_admin' || user.role === 'user') ? 'lg:col-span-4' : 'lg:col-span-5'} flex items-center gap-3`}>
+              <div className="relative w-10 h-10">
+                <div className="five-color-ring" />
+                <div className="five-color-core" />
+              </div>
+              <div>
+                <div className="text-xs uppercase tracking-[0.35em] text-slate-400">Five Color Method</div>
+                <h2 className="text-lg font-bold text-slate-800">五色项目管理法</h2>
+              </div>
             </div>
-            <div>
-              <div className="text-xs uppercase tracking-[0.35em] text-slate-400">Five Color Method</div>
-              <h2 className="text-lg font-bold text-slate-800">五色项目管理法</h2>
-            </div>
+            {(user.role === 'admin' || user.role === 'sub_admin') && (
+              <div className="lg:col-span-1 w-full flex items-center gap-2">
+                <button
+                  onClick={() => setShowAdmin(!showAdmin)}
+                  className="flex-1 min-w-0 h-10 px-3 text-xs font-semibold rounded-xl border border-slate-200 bg-white hover:bg-slate-50"
+                >
+                  {showAdmin ? '返回进度' : (user.role === 'admin' ? '管理员后台' : '操作记录')}
+                </button>
+                <button
+                  onClick={() => setActiveModal('review-center')}
+                  className="relative flex-1 min-w-0 h-10 px-3 text-xs font-semibold rounded-xl border border-slate-200 bg-white hover:bg-slate-50"
+                >
+                  审核中心
+                  {pendingReviews.length > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 min-w-5 h-5 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none flex items-center justify-center">
+                      {pendingReviews.length > 99 ? '99+' : pendingReviews.length}
+                    </span>
+                  )}
+                </button>
+              </div>
+            )}
+            {user.role === 'user' && (
+              <div className="lg:col-span-1 w-full flex items-center gap-2">
+                <button
+                  onClick={openReviewResultsModal}
+                  className="relative flex-1 min-w-0 h-10 px-3 text-xs font-semibold rounded-xl border border-slate-200 bg-white hover:bg-slate-50"
+                >
+                  审核结果
+                  {reviewResultsUnreadCount > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 min-w-5 h-5 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none flex items-center justify-center">
+                      {reviewResultsUnreadCount > 99 ? '99+' : reviewResultsUnreadCount}
+                    </span>
+                  )}
+                </button>
+              </div>
+            )}
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-10">
             <StatCard
@@ -1075,23 +1682,23 @@ export default function App() {
             <StatCard
               title="需关注"
               value={stats.warning}
-              colorClass="text-amber-500"
+              colorClass="text-amber-300"
               icon={AlertTriangle}
               hover={{
                 title: '黄色：需关注',
                 desc: '任务接近逾期或有风险，需要关注。',
-                bgClass: 'bg-amber-500'
+                bgClass: 'bg-amber-300'
               }}
             />
             <StatCard
               title="已逾期"
               value={stats.risk}
-              colorClass="text-red-500"
+              colorClass="text-orange-500"
               icon={AlertCircle}
               hover={{
-                title: '红色：已逾期',
+                title: '橙色：已逾期',
                 desc: '任务已逾期，请优先处理。',
-                bgClass: 'bg-red-600'
+                bgClass: 'bg-orange-600'
               }}
             />
           </div>
@@ -1175,8 +1782,35 @@ export default function App() {
                   </div>
                 </div>
                 <div className="relative bg-white/95 backdrop-blur rounded-2xl border border-slate-200 shadow-[0_10px_24px_rgba(15,23,42,0.08)] px-4 py-[17px]">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">状态筛选</div>
+                  <div className="flex flex-wrap items-center gap-5">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">任务范围</div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          onClick={() => setTaskScopeFilter('ALL')}
+                          className={`px-3 py-1.5 rounded-full border text-xs font-semibold transition-colors ${
+                            taskScopeFilter === 'ALL'
+                              ? 'bg-tech-blue text-white border-tech-blue shadow-sm'
+                              : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                          }`}
+                        >
+                          全部任务
+                        </button>
+                        <button
+                          onClick={() => setTaskScopeFilter('MY_GROUP')}
+                          className={`px-3 py-1.5 rounded-full border text-xs font-semibold transition-colors ${
+                            taskScopeFilter === 'MY_GROUP'
+                              ? 'bg-tech-blue text-white border-tech-blue shadow-sm'
+                              : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                          }`}
+                        >
+                          我所在组别任务
+                        </button>
+                      </div>
+                    </div>
+                    <div className="h-5 w-px bg-slate-200 hidden sm:block" />
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">状态筛选</div>
                     <div className="flex flex-wrap items-center gap-2">
                       <button
                         onClick={() => setStatusFilter('ALL')}
@@ -1208,6 +1842,7 @@ export default function App() {
                           </button>
                         );
                     })}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1249,16 +1884,21 @@ export default function App() {
                 {/* Right Column: Tasks */}
                 <div className="space-y-8">
                   {(() => {
-                    const visibleTasks = statusFilter === 'ALL'
-                      ? phase.mainTasks
-                      : phase.mainTasks.filter((task) => task.subTasks.some((subTask) => subTask.status === statusFilter));
+                    const visibleTasks = phase.mainTasks.filter((task) => {
+                      const scopedSubTasks = task.subTasks.filter((subTask) => matchTaskScope(subTask.owner));
+                      if (statusFilter === 'ALL') {
+                        return scopedSubTasks.length > 0;
+                      }
+                      return scopedSubTasks.some((subTask) => subTask.status === statusFilter);
+                    });
 
                     return (
                     <>
                     {visibleTasks.map((task) => {
+                      const scopedSubTasks = task.subTasks.filter((subTask) => matchTaskScope(subTask.owner));
                       const visibleSubTasks = statusFilter === 'ALL'
-                        ? task.subTasks
-                        : task.subTasks.filter((subTask) => subTask.status === statusFilter);
+                        ? scopedSubTasks
+                        : scopedSubTasks.filter((subTask) => subTask.status === statusFilter);
 
                       return (
                       <div key={task.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-visible hover:shadow-lg transition-all duration-300 group">
@@ -1339,8 +1979,9 @@ export default function App() {
                                 <div className="md:col-span-1 flex md:justify-center">
                                     <StatusSelect 
                                         status={subTask.status} 
-                                        onChange={(s) => updateStatus(phase.id, task.id, subTask.id, s)}
-                                        allowComplete={user?.role === 'admin' || user?.role === 'sub_admin'}
+                                        onChange={(s) => updateStatus(phase.id, task.id, subTask.id, subTask.status, s)}
+                                        showWithdraw={user?.role === 'user' && subTask.status === Status.REVIEWING && Boolean(subTask.canWithdrawReview)}
+                                        onWithdraw={() => withdrawCompletionReview(subTask.id)}
                                     />
                                 </div>
 
@@ -1391,7 +2032,7 @@ export default function App() {
                     </div>
                     );
                     })}
-                    {statusFilter !== 'ALL' && visibleTasks.length === 0 && phase.mainTasks.length > 0 && (
+                    {visibleTasks.length === 0 && phase.mainTasks.length > 0 && (
                       <div className="bg-slate-50 border border-dashed border-slate-200 rounded-xl p-8 text-center text-slate-400">
                         此阶段暂无符合筛选条件的任务
                       </div>
@@ -1424,6 +2065,229 @@ export default function App() {
           <p className="text-slate-400 text-sm">© 2026 组委会 · 内部项目管理系统</p>
         </div>
       </footer>
+
+      {/* --- Export PDF Modal --- */}
+      <Modal
+        isOpen={activeModal === 'export-pdf'}
+        onClose={() => setActiveModal(null)}
+        title="导出任务状态 PDF"
+        maxWidthClass="max-w-3xl"
+      >
+        <div className="space-y-4">
+          <div className="text-sm text-slate-600">
+            选择要导出的任务状态（可多选）
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setAllExportStatuses(true)}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 bg-white hover:bg-slate-50"
+            >
+              全选
+            </button>
+            <button
+              type="button"
+              onClick={() => setAllExportStatuses(false)}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 bg-white hover:bg-slate-50"
+            >
+              清空
+            </button>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+            {STATUS_ORDER.map((status) => (
+              <label
+                key={status}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 cursor-pointer"
+              >
+                <input
+                  type="checkbox"
+                  checked={exportStatusSelection[status]}
+                  onChange={() => toggleExportStatus(status)}
+                  className="accent-tech-blue"
+                />
+                <StatusDot status={status} className="w-2.5 h-2.5" />
+                <span className="text-sm text-slate-700">{STATUS_CONFIG[status].label}</span>
+                <span className="text-xs text-slate-400">({statusCounts[status]})</span>
+              </label>
+            ))}
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+            已选状态：<span className="font-semibold text-slate-800">{selectedExportStatuses.length}</span> 个
+            ，可导出任务：<span className="font-semibold text-tech-blue">{exportRows.length}</span> 条
+          </div>
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => setActiveModal(null)}
+              disabled={exportingPdf}
+              className="px-4 py-2 text-sm font-semibold rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={exportToPdf}
+              disabled={exportingPdf}
+              className="px-4 py-2 text-sm font-semibold rounded-lg bg-tech-blue text-white hover:bg-blue-900 disabled:opacity-60"
+            >
+              {exportingPdf ? '导出中...' : '导出 PDF'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* --- Review Center Modal --- */}
+      <Modal
+        isOpen={activeModal === 'review-center'}
+        onClose={() => setActiveModal(null)}
+        title="审核中心"
+        maxWidthClass="max-w-[96vw] xl:max-w-[1680px]"
+      >
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-sm text-slate-600">
+              待审核任务共 <span className="font-bold text-red-500">{pendingReviews.length}</span> 条
+            </div>
+            <div className="text-xs text-slate-400">
+              {user.role === 'admin' ? '范围：全部组别' : `范围：${user.group}`}
+            </div>
+          </div>
+          <div className="border border-slate-200 rounded-xl overflow-hidden">
+            {pendingReviews.length === 0 ? (
+              <div className="p-12 text-center text-slate-400 text-sm">暂无待审核任务</div>
+            ) : (
+              <div className="max-h-[62vh] overflow-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-slate-50 text-slate-500">
+                    <tr>
+                      <th className="text-left px-4 py-3">阶段 / 分组</th>
+                      <th className="text-left px-4 py-3">任务描述</th>
+                      <th className="text-left px-4 py-3">申请人</th>
+                      <th className="text-left px-4 py-3">截止时间</th>
+                      <th className="text-left px-4 py-3">申请时间</th>
+                      <th className="text-left px-4 py-3">来源状态</th>
+                      <th className="text-right px-4 py-3">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pendingReviews.map((item) => {
+                      const approveKey = `${item.subTaskId}:approve`;
+                      const rejectKey = `${item.subTaskId}:reject`;
+                      const actionBusy = reviewActionLoadingId === approveKey || reviewActionLoadingId === rejectKey;
+                      return (
+                        <tr key={item.subTaskId} className="border-t border-slate-100 align-top">
+                          <td className="px-4 py-3">
+                            <div className="text-slate-700 font-medium">{item.phaseTitle || '-'}</div>
+                            <div className="text-xs text-slate-400 mt-1">{item.mainTaskTitle || '-'}</div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="text-slate-700 leading-relaxed">{item.description}</div>
+                            <div className="text-xs text-slate-400 mt-1">责任：{item.owner}</div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="text-slate-700">{item.applicantName || '-'}</div>
+                            <div className="text-xs text-slate-400 mt-1">{item.applicantGroup || '-'}</div>
+                          </td>
+                          <td className="px-4 py-3 text-slate-600">{formatDeadline(item.deadline)}</td>
+                          <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{formatReviewTime(item.requestedAt)}</td>
+                          <td className="px-4 py-3">
+                            <span className="inline-flex items-center px-2 py-1 rounded-md bg-slate-100 text-slate-600 text-xs font-semibold">
+                              {item.reviewFromLabel}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-right whitespace-nowrap">
+                            <div className="inline-flex items-center gap-2">
+                              <button
+                                type="button"
+                                disabled={Boolean(reviewActionLoadingId)}
+                                onClick={() => handleReviewDecision(item.subTaskId, 'reject')}
+                                className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+                              >
+                                {reviewActionLoadingId === rejectKey ? '处理中...' : '驳回'}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={Boolean(reviewActionLoadingId)}
+                                onClick={() => handleReviewDecision(item.subTaskId, 'approve')}
+                                className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-tech-blue text-white hover:bg-blue-900 disabled:opacity-60"
+                              >
+                                {reviewActionLoadingId === approveKey ? '处理中...' : '通过'}
+                              </button>
+                            </div>
+                            {actionBusy && <div className="text-[11px] text-slate-400 mt-1">请稍候...</div>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      </Modal>
+
+      {/* --- Review Result Modal --- */}
+      <Modal
+        isOpen={activeModal === 'review-results'}
+        onClose={() => setActiveModal(null)}
+        title="审核结果"
+        maxWidthClass="max-w-[96vw] xl:max-w-[1500px]"
+      >
+        <div className="space-y-4">
+          <div className="text-sm text-slate-600">
+            你的审核结果共 <span className="font-bold text-tech-blue">{reviewResults.length}</span> 条
+          </div>
+          <div className="border border-slate-200 rounded-xl overflow-hidden">
+            {reviewResults.length === 0 ? (
+              <div className="p-12 text-center text-slate-400 text-sm">暂无审核结果</div>
+            ) : (
+              <div className="max-h-[62vh] overflow-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-slate-50 text-slate-500">
+                    <tr>
+                      <th className="text-left px-4 py-3">阶段 / 分组</th>
+                      <th className="text-left px-4 py-3">任务描述</th>
+                      <th className="text-left px-4 py-3">截止时间</th>
+                      <th className="text-left px-4 py-3">审核结果</th>
+                      <th className="text-left px-4 py-3">审核人</th>
+                      <th className="text-left px-4 py-3">审核时间</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reviewResults.map((item) => (
+                      <tr key={item.id} className="border-t border-slate-100 align-top">
+                        <td className="px-4 py-3">
+                          <div className="text-slate-700 font-medium">{item.phaseTitle || '-'}</div>
+                          <div className="text-xs text-slate-400 mt-1">{item.mainTaskTitle || '-'}</div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="text-slate-700 leading-relaxed">{item.description || '-'}</div>
+                          <div className="text-xs text-slate-400 mt-1">责任：{item.owner || '-'}</div>
+                        </td>
+                        <td className="px-4 py-3 text-slate-600">{formatDeadline(item.deadline)}</td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${
+                              item.decision === 'approve'
+                                ? 'bg-emerald-50 text-emerald-700'
+                                : 'bg-red-50 text-red-700'
+                            }`}
+                          >
+                            {item.decisionLabel}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-slate-600">{item.reviewerName || '-'}</td>
+                        <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{formatReviewTime(item.reviewedAt)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      </Modal>
 
       {/* --- Task Modal --- */}
       <Modal isOpen={activeModal === 'task'} onClose={() => setActiveModal(null)} title={modalTarget.type === 'edit' ? '编辑任务' : '添加新任务'}>
@@ -1475,6 +2339,51 @@ export default function App() {
           >
             {modalTarget.type === 'edit' ? '保存修改' : '确认添加'}
           </button>
+        </div>
+      </Modal>
+
+      {/* --- Review Modal --- */}
+      <Modal
+        isOpen={activeModal === 'review-complete'}
+        onClose={() => {
+          setActiveModal(null);
+          setReviewTarget(null);
+        }}
+        title="提交完成审核"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-slate-600 leading-relaxed">
+            你正在申请将任务状态标记为“已完成”。提交后任务将进入“审核中”，通过后由管理员或子管理员改为“已完成”。
+          </p>
+          {reviewTarget && (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+              当前状态：{STATUS_CONFIG[reviewTarget.fromStatus].label}
+            </div>
+          )}
+          <div className="rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-2 text-xs text-cyan-700">
+            提交后你仍可在“审核中”状态下悬停状态栏并点击“撤回”。
+          </div>
+          <div className="flex items-center justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => {
+                setActiveModal(null);
+                setReviewTarget(null);
+              }}
+              disabled={reviewSubmitting}
+              className="px-4 py-2 text-sm font-semibold rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={submitCompletionReview}
+              disabled={reviewSubmitting || !reviewTarget}
+              className="px-4 py-2 text-sm font-semibold rounded-lg bg-tech-blue text-white hover:bg-blue-900 disabled:opacity-60"
+            >
+              {reviewSubmitting ? '提交中...' : '确定提交审核'}
+            </button>
+          </div>
         </div>
       </Modal>
 

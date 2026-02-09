@@ -1,4 +1,5 @@
 import os
+import re
 from functools import wraps
 from typing import Callable
 from uuid import uuid4
@@ -30,11 +31,14 @@ def create_app():
     Migrate(app, db)
     socketio = SocketIO(app, cors_allowed_origins="*")
 
-    valid_statuses = {"PENDING", "IN_PROGRESS", "WARNING", "COMPLETED", "RISK"}
+    valid_statuses = {"PENDING", "IN_PROGRESS", "WARNING", "REVIEWING", "COMPLETED", "RISK"}
+    manual_statuses = {"PENDING", "IN_PROGRESS", "COMPLETED"}
+    logic_statuses = {"WARNING", "RISK", "REVIEWING"}
     status_aliases = {
         "未开始": "PENDING",
         "进行中": "IN_PROGRESS",
         "即将逾期": "WARNING",
+        "审核中": "REVIEWING",
         "已完成": "COMPLETED",
         "已逾期": "RISK",
     }
@@ -179,10 +183,90 @@ def create_app():
     def can_mark_completed(user: User) -> bool:
         return user.role in {"admin", "sub_admin"}
 
+    def find_latest_review_request_log(sub_task_id: str):
+        return (
+            AuditLog.query.filter(
+                AuditLog.action == "submit_completion_review",
+                AuditLog.details.isnot(None),
+                AuditLog.details.like(f"%[sub_task_id:{sub_task_id}]%"),
+            )
+            .order_by(AuditLog.id.desc())
+            .first()
+        )
+
+    def extract_review_from_status(detail: str | None):
+        if not detail:
+            return None
+        matched = re.search(r"\[review_from:([A-Z_]+)\]", detail)
+        if not matched:
+            return None
+        return matched.group(1)
+
+    def extract_sub_task_id(detail: str | None):
+        if not detail:
+            return None
+        matched = re.search(r"\[sub_task_id:([^\]]+)\]", detail)
+        if not matched:
+            return None
+        value = matched.group(1).strip()
+        return value or None
+
+    def extract_applicant_user_id(detail: str | None):
+        if not detail:
+            return None
+        matched = re.search(r"\[applicant_user_id:(\d+)\]", detail)
+        if not matched:
+            return None
+        try:
+            return int(matched.group(1))
+        except (TypeError, ValueError):
+            return None
+
+    def extract_task_description(detail: str | None):
+        if not detail:
+            return None
+        matched = re.search(r"任务【([^】]+)】", detail)
+        if not matched:
+            return None
+        value = matched.group(1).strip()
+        return value or None
+
+    def find_review_request_log_before(sub_task_id: str, before_log_id: int):
+        return (
+            AuditLog.query.filter(
+                AuditLog.action == "submit_completion_review",
+                AuditLog.details.isnot(None),
+                AuditLog.details.like(f"%[sub_task_id:{sub_task_id}]%"),
+                AuditLog.id < before_log_id,
+            )
+            .order_by(AuditLog.id.desc())
+            .first()
+        )
+
+    def get_review_request_meta(sub_task: SubTask):
+        review_log = find_latest_review_request_log(sub_task.id)
+        applicant = User.query.get(review_log.user_id) if review_log and review_log.user_id else None
+        review_from_status = extract_review_from_status(review_log.details if review_log else None)
+        return {
+            "review_log": review_log,
+            "applicant": applicant,
+            "applicant_name": (applicant.name if applicant else (review_log.user_name if review_log else "未知用户")),
+            "applicant_group": (applicant.group_name if applicant else ""),
+            "review_from_status": review_from_status if review_from_status in valid_statuses else "IN_PROGRESS",
+        }
+
+    def can_review_request(reviewer: User, applicant_group: str) -> bool:
+        if reviewer.role == "admin":
+            return True
+        if reviewer.role == "sub_admin":
+            return bool(applicant_group) and reviewer.group_name == applicant_group
+        return False
+
     ACTION_LABELS = {
         "register": "注册",
         "login": "登录",
         "change_password": "修改密码",
+        "admin_create_user": "新增用户",
         "admin_update_user": "更新用户",
         "create_phase": "新增阶段",
         "update_phase": "更新阶段",
@@ -193,6 +277,10 @@ def create_app():
         "create_task": "新增任务",
         "update_task": "更新任务",
         "delete_task": "删除任务",
+        "submit_completion_review": "提交完成审核",
+        "withdraw_completion_review": "撤回完成审核",
+        "approve_completion_review": "审核通过",
+        "reject_completion_review": "审核驳回",
         "reset_data": "重置数据",
     }
 
@@ -200,6 +288,7 @@ def create_app():
         "PENDING": "未开始",
         "IN_PROGRESS": "进行中",
         "WARNING": "即将逾期",
+        "REVIEWING": "审核中",
         "COMPLETED": "已完成",
         "RISK": "已逾期",
     }
@@ -292,6 +381,48 @@ def create_app():
         users = User.query.order_by(User.created_at.desc()).all()
         return jsonify([serialize_user(u) for u in users])
 
+    @app.post("/api/admin/users")
+    @require_admin
+    def create_user(admin_user: User):
+        payload = request.get_json(force=True) or {}
+        name = (payload.get("name") or "").strip()
+        phone = (payload.get("phone") or "").strip()
+        group_name = (payload.get("group") or "").strip()
+        role_title = (payload.get("roleTitle") or "").strip()
+        role = (payload.get("role") or "user").strip()
+        password = payload.get("password") or "123456"
+
+        if not all([name, phone, group_name, role_title]):
+            return jsonify({"error": "missing fields"}), 400
+        if role not in ROLE_LABELS:
+            return jsonify({"error": "invalid role"}), 400
+        if User.query.filter_by(phone=phone).first():
+            return jsonify({"error": "phone already exists"}), 400
+
+        user = User(
+            name=name,
+            phone=phone,
+            group_name=group_name,
+            role_title=role_title,
+            role=role,
+            password_hash=generate_password_hash(password),
+        )
+        db.session.add(user)
+        db.session.commit()
+
+        log_action(
+            admin_user,
+            "admin_create_user",
+            (
+                f"新增用户【{short_text(name)} / {phone}】："
+                f"组别【{short_text(group_name)}】，"
+                f"职务【{short_text(role_title)}】，"
+                f"角色【{role_text(role)}】，"
+                f"初始密码【{'默认123456' if not payload.get('password') else '已自定义'}】"
+            ),
+        )
+        return jsonify({"ok": True, "id": user.id})
+
     @app.patch("/api/admin/users/<int:user_id>")
     @require_admin
     def update_user(admin_user: User, user_id: int):
@@ -353,7 +484,28 @@ def create_app():
     @app.get("/api/phases")
     @require_auth
     def list_phases(user: User):
-        return jsonify(get_full_data())
+        data = get_full_data()
+        withdrawable_ids: set[str] = set()
+        if user.role == "user":
+            reviewing_sub_task_ids = [
+                st.id for st in SubTask.query.with_entities(SubTask.id).filter_by(status="REVIEWING").all()
+            ]
+            for sub_task_id in reviewing_sub_task_ids:
+                review_log = find_latest_review_request_log(sub_task_id)
+                if review_log and review_log.user_id == user.id:
+                    withdrawable_ids.add(sub_task_id)
+
+        for phase in data:
+            for main_task in phase.get("mainTasks", []):
+                for sub_task in main_task.get("subTasks", []):
+                    sub_task_id = sub_task.get("id")
+                    sub_task["canWithdrawReview"] = (
+                        bool(sub_task_id)
+                        and sub_task.get("status") == "REVIEWING"
+                        and sub_task_id in withdrawable_ids
+                    )
+
+        return jsonify(data)
 
     @app.post("/api/phases")
     @require_auth
@@ -525,6 +677,8 @@ def create_app():
         status = normalize_status(payload.get("status", "PENDING"))
         if status not in valid_statuses:
             return jsonify({"error": "invalid status", "received": status}), 400
+        if status in logic_statuses:
+            return jsonify({"error": "status is system managed", "received": status}), 400
         if status == "COMPLETED" and not can_mark_completed(user):
             return jsonify({"error": "forbidden"}), 403
         if not main_task_id or not description or not owner or not deadline:
@@ -576,6 +730,17 @@ def create_app():
             status = normalize_status(payload["status"])
             if status not in valid_statuses:
                 return jsonify({"error": "invalid status", "received": status}), 400
+            if status in {"WARNING", "RISK"}:
+                return jsonify({"error": "status is system managed", "received": status}), 400
+            if before["status"] == "REVIEWING" and status != "REVIEWING":
+                return jsonify({"error": "use review workflow endpoint"}), 403
+            if status == "REVIEWING":
+                if user.role != "user":
+                    return jsonify({"error": "use review workflow endpoint"}), 403
+                if not payload.get("submitReview"):
+                    return jsonify({"error": "submitReview flag required"}), 403
+            if status not in manual_statuses and status != "REVIEWING":
+                return jsonify({"error": "invalid status", "received": status}), 400
             if status == "COMPLETED" and not can_mark_completed(user):
                 return jsonify({"error": "forbidden"}), 403
             sub_task.status = status
@@ -590,6 +755,16 @@ def create_app():
             format_change("顺序", before["order_index"], sub_task.order_index),
         ]
         detail = "；".join([c for c in changes if c]) or "无变更"
+        if before["status"] != sub_task.status and sub_task.status == "REVIEWING":
+            log_action(
+                user,
+                "submit_completion_review",
+                (
+                    f"提交完成审核：{task_context(sub_task)}；"
+                    f"[sub_task_id:{sub_task.id}]"
+                    f"[review_from:{before['status']}]"
+                ),
+            )
         log_action(
             user,
             "update_task",
@@ -597,6 +772,210 @@ def create_app():
         )
         emit_update()
         return jsonify({"ok": True})
+
+    @app.post("/api/sub-tasks/<sub_task_id>/withdraw-review")
+    @require_auth
+    def withdraw_sub_task_review(user: User, sub_task_id):
+        sub_task = SubTask.query.get_or_404(sub_task_id)
+        if user.role != "user":
+            return jsonify({"error": "forbidden"}), 403
+        if sub_task.status != "REVIEWING":
+            return jsonify({"error": "task is not under review"}), 400
+
+        review_log = find_latest_review_request_log(sub_task.id)
+        if not review_log or review_log.user_id != user.id:
+            return jsonify({"error": "only applicant can withdraw"}), 403
+
+        original_status = extract_review_from_status(review_log.details)
+        if original_status not in {"PENDING", "IN_PROGRESS"}:
+            original_status = "IN_PROGRESS"
+
+        sub_task.status = original_status
+        db.session.commit()
+        log_action(
+            user,
+            "withdraw_completion_review",
+            (
+                f"撤回完成审核：{task_context(sub_task)}；"
+                f"[sub_task_id:{sub_task.id}]；"
+                f"恢复状态【{status_text(original_status)}】"
+            ),
+        )
+        emit_update()
+        return jsonify({"ok": True, "status": original_status})
+
+    @app.get("/api/reviews/pending")
+    @require_auth
+    def list_pending_reviews(user: User):
+        if user.role not in {"admin", "sub_admin"}:
+            return jsonify({"error": "forbidden"}), 403
+
+        pending_reviews = []
+        sub_tasks = (
+            SubTask.query.filter_by(status="REVIEWING")
+            .order_by(SubTask.main_task_id.asc(), SubTask.order_index.asc())
+            .all()
+        )
+        for sub_task in sub_tasks:
+            main_task = sub_task.main_task
+            phase = main_task.phase if main_task else None
+            review_meta = get_review_request_meta(sub_task)
+            applicant_group = review_meta["applicant_group"]
+
+            if user.role == "sub_admin" and not can_review_request(user, applicant_group):
+                continue
+
+            review_log = review_meta["review_log"]
+            review_from_status = review_meta["review_from_status"]
+            pending_reviews.append(
+                {
+                    "subTaskId": sub_task.id,
+                    "phaseTitle": phase.title if phase else "",
+                    "mainTaskTitle": main_task.title if main_task else "",
+                    "description": sub_task.description,
+                    "owner": sub_task.owner,
+                    "deadline": sub_task.deadline,
+                    "status": sub_task.status,
+                    "reviewFromStatus": review_from_status,
+                    "reviewFromLabel": status_text(review_from_status),
+                    "applicantName": review_meta["applicant_name"],
+                    "applicantGroup": applicant_group,
+                    "requestedAt": review_log.created_at.isoformat() if review_log and review_log.created_at else "",
+                }
+            )
+        return jsonify(pending_reviews)
+
+    @app.get("/api/reviews/my-results")
+    @require_auth
+    def list_my_review_results(user: User):
+        if user.role != "user":
+            return jsonify([])
+
+        decision_logs = (
+            AuditLog.query.filter(
+                AuditLog.action.in_(["approve_completion_review", "reject_completion_review"])
+            )
+            .order_by(AuditLog.id.desc())
+            .limit(500)
+            .all()
+        )
+
+        results = []
+        for log in decision_logs:
+            details = log.details or ""
+            sub_task_id = extract_sub_task_id(details)
+            if not sub_task_id:
+                task_description = extract_task_description(details)
+                if task_description:
+                    request_log = (
+                        AuditLog.query.filter(
+                            AuditLog.action == "submit_completion_review",
+                            AuditLog.user_id == user.id,
+                            AuditLog.details.isnot(None),
+                            AuditLog.details.like(f"%任务【{task_description}%"),
+                            AuditLog.id < log.id,
+                        )
+                        .order_by(AuditLog.id.desc())
+                        .first()
+                    )
+                    if request_log:
+                        sub_task_id = extract_sub_task_id(request_log.details)
+            if not sub_task_id:
+                continue
+
+            applicant_user_id = extract_applicant_user_id(details)
+            if applicant_user_id is None:
+                request_log = find_review_request_log_before(sub_task_id, log.id)
+                applicant_user_id = request_log.user_id if request_log else None
+            if applicant_user_id != user.id:
+                continue
+
+            sub_task = SubTask.query.get(sub_task_id)
+            main_task = sub_task.main_task if sub_task else None
+            phase = main_task.phase if main_task else None
+            decision = "approve" if log.action == "approve_completion_review" else "reject"
+
+            results.append(
+                {
+                    "id": log.id,
+                    "subTaskId": sub_task_id,
+                    "phaseTitle": phase.title if phase else "",
+                    "mainTaskTitle": main_task.title if main_task else "",
+                    "description": sub_task.description if sub_task else "",
+                    "owner": sub_task.owner if sub_task else "",
+                    "deadline": sub_task.deadline if sub_task else "",
+                    "decision": decision,
+                    "decisionLabel": "通过" if decision == "approve" else "驳回",
+                    "reviewerName": log.user_name,
+                    "reviewedAt": log.created_at.isoformat() if log.created_at else "",
+                }
+            )
+        return jsonify(results)
+
+    @app.post("/api/sub-tasks/<sub_task_id>/review-decision")
+    @require_auth
+    def decide_sub_task_review(user: User, sub_task_id):
+        if user.role not in {"admin", "sub_admin"}:
+            return jsonify({"error": "forbidden"}), 403
+
+        payload = request.get_json(silent=True) or {}
+        decision = str(payload.get("decision", "approve")).strip().lower()
+        if decision not in {"approve", "reject"}:
+            return jsonify({"error": "invalid decision"}), 400
+
+        sub_task = SubTask.query.get_or_404(sub_task_id)
+        if sub_task.status != "REVIEWING":
+            return jsonify({"error": "task is not under review"}), 400
+
+        review_meta = get_review_request_meta(sub_task)
+        applicant_group = review_meta["applicant_group"]
+        if not can_review_request(user, applicant_group):
+            return jsonify({"error": "forbidden"}), 403
+
+        review_from_status = review_meta["review_from_status"]
+        if decision == "approve":
+            sub_task.status = "COMPLETED"
+            db.session.commit()
+            applicant = review_meta["applicant"]
+            marker = (
+                f"；[sub_task_id:{sub_task.id}]"
+                f"{f'[applicant_user_id:{applicant.id}]' if applicant else ''}"
+            )
+            log_action(
+                user,
+                "approve_completion_review",
+                (
+                    f"审核通过：{task_context(sub_task)}；"
+                    f"申请人【{review_meta['applicant_name']}】；"
+                    f"原状态【{status_text(review_from_status)}】"
+                    f"{marker}"
+                ),
+            )
+            emit_update()
+            return jsonify({"ok": True, "status": sub_task.status})
+
+        rollback_status = review_from_status
+        if rollback_status not in {"PENDING", "IN_PROGRESS"}:
+            rollback_status = "IN_PROGRESS"
+        sub_task.status = rollback_status
+        db.session.commit()
+        applicant = review_meta["applicant"]
+        marker = (
+            f"；[sub_task_id:{sub_task.id}]"
+            f"{f'[applicant_user_id:{applicant.id}]' if applicant else ''}"
+        )
+        log_action(
+            user,
+            "reject_completion_review",
+            (
+                f"审核驳回：{task_context(sub_task)}；"
+                f"申请人【{review_meta['applicant_name']}】；"
+                f"恢复状态【{status_text(rollback_status)}】"
+                f"{marker}"
+            ),
+        )
+        emit_update()
+        return jsonify({"ok": True, "status": sub_task.status})
 
     @app.delete("/api/sub-tasks/<sub_task_id>")
     @require_auth

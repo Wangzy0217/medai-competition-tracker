@@ -22,12 +22,21 @@ export const STATUS_CONFIG = {
   },
   [Status.WARNING]: {
     label: '即将逾期',
-    color: 'bg-amber-50 text-amber-700 border-amber-400 ring-1 ring-amber-400/30',
-    dot: 'bg-amber-400',
-    glow: '0 0 12px rgba(251, 191, 36, 0.35)',
-    glowStrong: '0 0 20px rgba(251, 191, 36, 0.6)',
+    color: 'bg-amber-50 text-amber-500 border-amber-200 ring-1 ring-amber-200/40',
+    dot: 'bg-amber-200',
+    glow: '0 0 12px rgba(253, 230, 138, 0.32)',
+    glowStrong: '0 0 20px rgba(253, 230, 138, 0.52)',
     icon: <AlertTriangle size={14} />,
-    next: Status.RISK
+    next: Status.REVIEWING
+  },
+  [Status.REVIEWING]: {
+    label: '审核中',
+    color: 'bg-cyan-50 text-cyan-700 border-cyan-400 ring-1 ring-cyan-400/30',
+    dot: 'bg-cyan-500',
+    glow: '0 0 12px rgba(6, 182, 212, 0.35)',
+    glowStrong: '0 0 20px rgba(6, 182, 212, 0.6)',
+    icon: <Clock size={14} />,
+    next: Status.COMPLETED
   },
   [Status.COMPLETED]: {
     label: '已完成',
@@ -40,10 +49,10 @@ export const STATUS_CONFIG = {
   },
   [Status.RISK]: {
     label: '已逾期',
-    color: 'bg-red-50 text-red-700 border-red-400 ring-1 ring-red-400/30',
-    dot: 'bg-red-500',
-    glow: '0 0 12px rgba(239, 68, 68, 0.35)',
-    glowStrong: '0 0 20px rgba(239, 68, 68, 0.6)',
+    color: 'bg-orange-50 text-orange-700 border-orange-400 ring-1 ring-orange-400/30',
+    dot: 'bg-orange-500',
+    glow: '0 0 12px rgba(249, 115, 22, 0.35)',
+    glowStrong: '0 0 20px rgba(249, 115, 22, 0.6)',
     icon: <AlertCircle size={14} />,
     next: Status.COMPLETED
   }
@@ -53,6 +62,7 @@ export const STATUS_ORDER: Status[] = [
   Status.PENDING,
   Status.IN_PROGRESS,
   Status.WARNING,
+  Status.REVIEWING,
   Status.RISK,
   Status.COMPLETED
 ];

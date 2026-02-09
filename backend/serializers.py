@@ -21,17 +21,18 @@ def _parse_deadline(deadline: str):
 
 
 def _derive_status(current_status: str, deadline: str):
-    if current_status in {"COMPLETED", "RISK"}:
-        return current_status
+    manual_status = current_status if current_status in {"PENDING", "IN_PROGRESS", "COMPLETED", "REVIEWING"} else "IN_PROGRESS"
+    if manual_status in {"COMPLETED", "REVIEWING"}:
+        return manual_status
     parsed = _parse_deadline(deadline)
     if not parsed:
-        return current_status
+        return manual_status
     days_left = (parsed - date.today()).days
     if days_left < 0:
         return "RISK"
-    if days_left <= 3:
+    if days_left <= 10:
         return "WARNING"
-    return current_status
+    return manual_status
 
 
 def serialize_phase(phase: Phase):

@@ -2,6 +2,7 @@ export enum Status {
   PENDING = 'PENDING',
   IN_PROGRESS = 'IN_PROGRESS',
   WARNING = 'WARNING',
+  REVIEWING = 'REVIEWING',
   COMPLETED = 'COMPLETED',
   RISK = 'RISK',
 }
@@ -12,6 +13,7 @@ export interface SubTask {
   owner: string;
   deadline: string;
   status: Status;
+  canWithdrawReview?: boolean;
 }
 
 export interface MainTask {
