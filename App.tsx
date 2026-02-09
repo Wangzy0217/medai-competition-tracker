@@ -52,7 +52,7 @@ const StatusSelect = ({
   const isReadOnly = showWithdraw || status === Status.REVIEWING;
   const selectValue = isSystemStatus ? '__SYSTEM__' : status;
   return (
-    <div className="relative inline-block group w-full min-w-[120px] max-w-[160px]">
+    <div className="relative inline-block group w-full min-w-[96px] sm:min-w-[120px] max-w-[140px] sm:max-w-[160px]">
       <select
         value={selectValue}
         disabled={isReadOnly}
@@ -224,7 +224,7 @@ const AuthCard = ({
   const [regForm, setRegForm] = useState({ name: '', phone: '', group: GROUP_OPTIONS[0], roleTitle: '', password: '' });
 
   return (
-    <div className="bg-white/55 backdrop-blur-2xl rounded-2xl border border-white/60 shadow-[0_18px_50px_rgba(15,23,42,0.18)] p-6 w-full max-w-md">
+    <div className="bg-white/55 backdrop-blur-2xl rounded-2xl border border-white/60 shadow-[0_18px_50px_rgba(15,23,42,0.18)] p-4 sm:p-6 w-full max-w-md">
       <div className="flex items-center gap-2 mb-6">
         <button
           onClick={() => setTab('login')}
@@ -427,7 +427,7 @@ const AdminPanel = ({
   return (
     <div className="space-y-8">
       {canManageUsers && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 sm:p-6">
           <div className="mb-4 flex items-center justify-between gap-3">
             <h2 className="text-lg font-bold text-slate-800">用户管理</h2>
             <button
@@ -438,7 +438,7 @@ const AdminPanel = ({
             </button>
           </div>
           <div className="overflow-auto">
-            <table className="min-w-full text-sm">
+            <table className="min-w-[720px] w-full text-sm">
               <thead className="text-slate-500">
                 <tr>
                   <th className="text-left py-2">姓名</th>
@@ -469,7 +469,7 @@ const AdminPanel = ({
       )}
 
       {canViewLogs && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 sm:p-6">
           <h2 className="text-lg font-bold text-slate-800 mb-4">操作记录</h2>
           <div className="space-y-3 max-h-[420px] overflow-auto">
             {logs.map((l) => (
@@ -486,7 +486,7 @@ const AdminPanel = ({
       {canManageUsers && (
         <Modal isOpen={showCreateUserModal} onClose={() => setShowCreateUserModal(false)} title="新增成员">
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">姓名</label>
                 <input className="w-full px-3 py-2 border border-slate-300 rounded-lg" value={createForm.name} onChange={e => setCreateForm({ ...createForm, name: e.target.value })} />
@@ -496,7 +496,7 @@ const AdminPanel = ({
                 <input className="w-full px-3 py-2 border border-slate-300 rounded-lg" value={createForm.phone} onChange={e => setCreateForm({ ...createForm, phone: e.target.value })} />
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">组别</label>
                 <select className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white" value={createForm.group} onChange={e => setCreateForm({ ...createForm, group: e.target.value })}>
@@ -531,7 +531,7 @@ const AdminPanel = ({
       {canManageUsers && (
         <Modal isOpen={!!editUser} onClose={() => setEditUser(null)} title="编辑用户">
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">姓名</label>
                 <input className="w-full px-3 py-2 border border-slate-300 rounded-lg" value={editForm.name} onChange={e => setEditForm({ ...editForm, name: e.target.value })} />
@@ -541,7 +541,7 @@ const AdminPanel = ({
                 <input className="w-full px-3 py-2 border border-slate-300 rounded-lg" value={editForm.phone} onChange={e => setEditForm({ ...editForm, phone: e.target.value })} />
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">组别</label>
                 <input className="w-full px-3 py-2 border border-slate-300 rounded-lg" value={editForm.group} onChange={e => setEditForm({ ...editForm, group: e.target.value })} />
@@ -551,7 +551,7 @@ const AdminPanel = ({
                 <input className="w-full px-3 py-2 border border-slate-300 rounded-lg" value={editForm.roleTitle} onChange={e => setEditForm({ ...editForm, roleTitle: e.target.value })} />
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">角色</label>
                 <select className="w-full px-3 py-2 border border-slate-300 rounded-lg" value={editForm.role} onChange={e => setEditForm({ ...editForm, role: e.target.value })}>
@@ -592,15 +592,15 @@ const Modal = ({
 }) => {
   if (!isOpen) return null;
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
-      <div className={`bg-white rounded-2xl shadow-2xl w-full ${maxWidthClass} overflow-hidden transition-all duration-200 transform scale-100 opacity-100`}>
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
-          <h3 className="text-lg font-bold text-slate-800">{title}</h3>
+    <div className="fixed inset-0 z-[100] flex items-start sm:items-center justify-center bg-slate-900/40 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto">
+      <div className={`bg-white rounded-2xl shadow-2xl w-full ${maxWidthClass} max-h-[calc(100dvh-1.5rem)] sm:max-h-[90vh] flex flex-col overflow-hidden transition-all duration-200 transform scale-100 opacity-100`}>
+        <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-slate-100 shrink-0">
+          <h3 className="text-base sm:text-lg font-bold text-slate-800">{title}</h3>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1 rounded-full hover:bg-slate-100">
             <X size={20} />
           </button>
         </div>
-        <div className="p-6">
+        <div className="p-4 sm:p-6 overflow-y-auto">
           {children}
         </div>
       </div>
@@ -1386,7 +1386,7 @@ export default function App() {
 
   if (!user) {
     return (
-      <div className="min-h-screen text-slate-900 flex items-center justify-center px-6 relative overflow-hidden">
+      <div className="min-h-screen text-slate-900 flex items-center justify-center px-4 sm:px-6 relative overflow-hidden">
         <style>{`
           @keyframes drift {
             0% { transform: translate3d(0, 0, 0) scale(1); }
@@ -1401,11 +1401,11 @@ export default function App() {
         `}</style>
         <div className="absolute inset-0 bg-sky-50" />
         <div
-          className="absolute -top-40 -right-40 w-[520px] h-[520px] rounded-full bg-sky-200/60 blur-3xl"
+          className="absolute -top-40 -right-40 w-[360px] h-[360px] sm:w-[520px] sm:h-[520px] rounded-full bg-sky-200/60 blur-3xl"
           style={{ animation: 'drift 12s ease-in-out infinite' }}
         />
         <div
-          className="absolute -bottom-56 -left-40 w-[640px] h-[640px] rounded-full bg-blue-200/50 blur-3xl"
+          className="absolute -bottom-56 -left-40 w-[420px] h-[420px] sm:w-[640px] sm:h-[640px] rounded-full bg-blue-200/50 blur-3xl"
           style={{ animation: 'drift 16s ease-in-out infinite' }}
         />
         <div className="absolute inset-x-0 bottom-0 h-56">
@@ -1423,7 +1423,7 @@ export default function App() {
         <div className="w-full max-w-[1200px] grid grid-cols-1 lg:grid-cols-2 gap-10 items-center relative z-10">
           <div>
             <p className="text-sm uppercase tracking-[0.35em] text-tech-blue/80 mb-4">AI Competition</p>
-            <h1 className="text-4xl md:text-5xl font-bold leading-tight">
+            <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold leading-tight">
               全国医保影像AI识图大赛<br />进度管理平台
             </h1>
             <p className="mt-6 text-slate-600 leading-relaxed">
@@ -1511,22 +1511,23 @@ export default function App() {
       <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-slate-200/60 shadow-sm relative">
         {toast && (
           <div className="absolute inset-x-0 top-0 h-16 flex items-center justify-center z-10 pointer-events-none">
-            <div className="max-w-[340px] w-[320px]">
+            <div className="max-w-[340px] w-[calc(100%-1rem)]">
               <Toast type={toast.type} message={toast.message} />
             </div>
           </div>
         )}
-        <div className="w-full max-w-[98%] xl:max-w-[2000px] mx-auto px-6 py-3 md:h-16 md:py-0 flex flex-wrap md:flex-nowrap items-center justify-between gap-y-3">
-          <div className="flex items-center gap-3">
+        <div className="w-full max-w-[98%] xl:max-w-[2000px] mx-auto px-4 sm:px-6 py-3 md:h-16 md:py-0 flex flex-wrap md:flex-nowrap items-center justify-between gap-y-3">
+          <div className="flex items-center gap-3 min-w-0">
             <div className="w-8 h-8 bg-tech-blue rounded-lg flex items-center justify-center text-white shadow-lg shadow-blue-900/20">
               <Layers size={18} />
             </div>
-            <div>
-              <h1 className="text-lg font-bold text-slate-900 leading-none">全国医保影像AI识图大赛 进度管理平台</h1>
+            <div className="min-w-0">
+              <h1 className="text-sm font-bold text-slate-900 leading-tight sm:hidden">进度管理平台</h1>
+              <h1 className="hidden sm:block text-base lg:text-lg font-bold text-slate-900 leading-tight break-words">全国医保影像AI识图大赛 进度管理平台</h1>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3 md:gap-4 justify-end">
+          <div className="w-full md:w-auto flex flex-nowrap sm:flex-wrap items-center gap-2 sm:gap-3 md:gap-4 justify-between sm:justify-end">
              <div className="hidden md:block text-xs font-medium text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
                 总进度: <span className="text-tech-blue font-bold">{stats.progress}%</span>
              </div>
@@ -1542,13 +1543,14 @@ export default function App() {
                 <RotateCcw size={18} />
               </button>
             )}
-            <div className="flex flex-wrap items-center gap-2 min-w-0">
+            <div className="flex flex-nowrap sm:flex-wrap items-center gap-2 min-w-0">
               <Avatar seed={avatarSeed} name={user.name} />
               <button
                 onClick={() => setShowPasswordModal(true)}
                 className="text-sm font-medium text-slate-700 hover:text-tech-blue max-w-[180px] sm:max-w-[240px] md:max-w-none truncate"
               >
-                {user.name} · {user.group}
+                <span className="sm:hidden">{user.name}</span>
+                <span className="hidden sm:inline">{user.name} · {user.group}</span>
               </button>
               <button onClick={handleLogout} className="text-xs text-slate-400 hover:text-slate-600">退出</button>
             </div>
@@ -1560,7 +1562,7 @@ export default function App() {
       </header>
 
       {/* --- Main Content --- */}
-      <main className="w-full max-w-[98%] xl:max-w-[2000px] mx-auto px-6 py-10">
+      <main className="w-full max-w-[98%] xl:max-w-[2000px] mx-auto px-4 sm:px-6 py-6 sm:py-10">
         {showAdmin ? (
           <>
             {(user.role === 'admin' || user.role === 'sub_admin') && (
@@ -1743,9 +1745,9 @@ export default function App() {
             </aside>
 
             <div className="min-w-0">
-              <div className="sticky top-[94px] z-40">
+              <div className="z-40 sm:sticky sm:top-[94px]">
                 <div className="mb-4 lg:hidden">
-                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-3 w-full max-w-[250px]">
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-3 w-full">
                     <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">关键节点</div>
                     <div className="space-y-1.5 max-h-[260px] overflow-auto pr-1">
                       {data.map((phase, idx) => {
@@ -1781,14 +1783,14 @@ export default function App() {
                     </div>
                   </div>
                 </div>
-                <div className="relative bg-white/95 backdrop-blur rounded-2xl border border-slate-200 shadow-[0_10px_24px_rgba(15,23,42,0.08)] px-4 py-[17px]">
-                  <div className="flex flex-wrap items-center gap-5">
-                    <div className="flex flex-wrap items-center gap-3">
+                <div className="relative bg-white/95 backdrop-blur rounded-2xl border border-slate-200 shadow-[0_10px_24px_rgba(15,23,42,0.08)] px-3 sm:px-4 py-3 sm:py-[17px]">
+                  <div className="flex flex-col items-start gap-3 sm:flex-row sm:flex-nowrap sm:items-center sm:gap-5">
+                    <div className="w-full sm:w-auto flex flex-col gap-2 sm:flex-row sm:flex-nowrap sm:items-center sm:gap-3">
                       <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">任务范围</div>
-                      <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex w-full sm:w-auto items-center gap-2 overflow-x-auto sm:flex-nowrap sm:overflow-visible whitespace-nowrap pb-1 sm:pb-0">
                         <button
                           onClick={() => setTaskScopeFilter('ALL')}
-                          className={`px-3 py-1.5 rounded-full border text-xs font-semibold transition-colors ${
+                          className={`shrink-0 sm:shrink px-3 py-1.5 rounded-full border text-xs font-semibold transition-colors ${
                             taskScopeFilter === 'ALL'
                               ? 'bg-tech-blue text-white border-tech-blue shadow-sm'
                               : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
@@ -1798,7 +1800,7 @@ export default function App() {
                         </button>
                         <button
                           onClick={() => setTaskScopeFilter('MY_GROUP')}
-                          className={`px-3 py-1.5 rounded-full border text-xs font-semibold transition-colors ${
+                          className={`shrink-0 sm:shrink px-3 py-1.5 rounded-full border text-xs font-semibold transition-colors ${
                             taskScopeFilter === 'MY_GROUP'
                               ? 'bg-tech-blue text-white border-tech-blue shadow-sm'
                               : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
@@ -1809,12 +1811,12 @@ export default function App() {
                       </div>
                     </div>
                     <div className="h-5 w-px bg-slate-200 hidden sm:block" />
-                    <div className="flex flex-wrap items-center gap-3">
+                    <div className="w-full sm:w-auto flex flex-col gap-2 sm:flex-row sm:flex-nowrap sm:items-center sm:gap-3">
                       <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">状态筛选</div>
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex w-full sm:w-auto items-center gap-2 overflow-x-auto sm:flex-nowrap sm:overflow-visible whitespace-nowrap pb-1 sm:pb-0">
                       <button
                         onClick={() => setStatusFilter('ALL')}
-                        className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold transition-colors ${
+                        className={`shrink-0 sm:shrink flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold transition-colors ${
                           statusFilter === 'ALL'
                             ? 'bg-tech-blue text-white border-tech-blue shadow-sm'
                             : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
@@ -1830,7 +1832,7 @@ export default function App() {
                           <button
                             key={status}
                             onClick={() => setStatusFilter(status)}
-                            className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold transition-colors ${
+                            className={`shrink-0 sm:shrink flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold transition-colors ${
                               isActive
                                 ? `${conf.color} shadow-sm`
                                 : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
@@ -1848,22 +1850,22 @@ export default function App() {
               </div>
               </div>
 
-              <div className="space-y-16 mt-5">
+              <div className="space-y-8 sm:space-y-16 mt-5">
                 {data.map((phase, pIdx) => (
             <div key={phase.id} id={`phase-${phase.id}`} className="relative scroll-mt-[170px]">
 
               <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-6 relative">
                 
                 {/* Left Column: Phase Title & Add Group Button */}
-                <div className="relative z-10 mb-6 lg:mb-0 pl-6">
+                <div className="relative z-10 mb-6 lg:mb-0 pl-0 sm:pl-4 lg:pl-6">
                   {pIdx !== data.length - 1 && <PhaseLine />}
                   <div className="lg:sticky lg:top-[170px]">
-                    <div className="flex lg:flex-col items-center lg:items-start gap-4 lg:gap-2">
-                      <div className="w-14 h-14 bg-white border-2 border-tech-blue text-tech-blue rounded-2xl flex items-center justify-center font-bold text-2xl shadow-lg shadow-blue-900/5">
+                    <div className="flex flex-col sm:flex-row lg:flex-col items-start sm:items-center lg:items-start gap-3 lg:gap-2">
+                      <div className="w-12 h-12 sm:w-14 sm:h-14 bg-white border-2 border-tech-blue text-tech-blue rounded-2xl flex items-center justify-center font-bold text-xl sm:text-2xl shadow-lg shadow-blue-900/5">
                         {pIdx + 1}
                       </div>
                       <div>
-                          <h2 className="text-xl font-bold text-slate-900">{phase.title}</h2>
+                          <h2 className="text-lg sm:text-xl font-bold text-slate-900">{phase.title}</h2>
                           <p className="text-sm font-mono text-slate-500 mt-1">{phase.dateRange}</p>
                       </div>
                     </div>
@@ -1903,7 +1905,7 @@ export default function App() {
                       return (
                       <div key={task.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-visible hover:shadow-lg transition-all duration-300 group">
                       {/* Group Header */}
-                      <div className="p-6 border-b border-slate-100 bg-slate-50/80 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                      <div className="p-4 sm:p-6 border-b border-slate-100 bg-slate-50/80 flex flex-col md:flex-row md:items-center justify-between gap-4">
                          <div className="flex flex-wrap items-center gap-3 min-w-0">
                            <div className="w-1.5 h-6 bg-tech-blue rounded-full"></div>
                            <h3 className="text-lg font-bold text-slate-800 min-w-0 break-words">{task.title}</h3>
@@ -1914,10 +1916,10 @@ export default function App() {
                              <Plus size={12} />
                              <span>添加任务</span>
                            </button>
-                           <button onClick={() => openEditGroup(phase.id, task.id, task.title, task.dateRange)} className="p-1.5 text-slate-400 hover:text-tech-blue hover:bg-white rounded-md transition-colors opacity-0 group-hover:opacity-100 shrink-0" title="修改组名">
+                           <button onClick={() => openEditGroup(phase.id, task.id, task.title, task.dateRange)} className="p-1.5 text-slate-400 hover:text-tech-blue hover:bg-white rounded-md transition-colors opacity-100 sm:opacity-0 sm:group-hover:opacity-100 shrink-0" title="修改组名">
                               <Edit2 size={14} />
                            </button>
-                           <button onClick={() => handleDeleteGroup(phase.id, task.id)} className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-white rounded-md transition-colors opacity-0 group-hover:opacity-100 shrink-0" title="删除分组">
+                           <button onClick={() => handleDeleteGroup(phase.id, task.id)} className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-white rounded-md transition-colors opacity-100 sm:opacity-0 sm:group-hover:opacity-100 shrink-0" title="删除分组">
                               <Trash2 size={14} />
                            </button>
                          </div>
@@ -1944,13 +1946,13 @@ export default function App() {
                         {visibleSubTasks.map((subTask) => {
                           const { group, name } = getOwnerInfo(subTask.owner);
                           return (
-                            <div key={subTask.id} className="p-6 grid grid-cols-1 md:grid-cols-12 gap-4 items-center hover:bg-blue-50/30 transition-colors group/row relative">
+                            <div key={subTask.id} className="p-4 sm:p-6 grid grid-cols-1 md:grid-cols-12 gap-4 items-center hover:bg-blue-50/30 transition-colors group/row relative">
 
                                 {/* Column 1: Description */}
                                 <div className="md:col-span-4 pr-4 min-w-0">
                                     <div className="flex items-start gap-3 min-w-0">
                                         <StatusDot status={subTask.status} animated className="mt-1.5 w-3.5 h-3.5 shrink-0 ring-2 ring-white/80" />
-                                        <p className="text-base font-medium text-slate-700 leading-relaxed">{subTask.description}</p>
+                                        <p className="text-sm sm:text-base font-medium text-slate-700 leading-relaxed">{subTask.description}</p>
                                     </div>
                                 </div>
                                 
@@ -2057,7 +2059,7 @@ export default function App() {
       </main>
 
       <footer className="bg-white border-t border-slate-200 py-10 mt-20">
-        <div className="w-full max-w-[98%] xl:max-w-[2000px] mx-auto px-6 text-center">
+        <div className="w-full max-w-[98%] xl:max-w-[2000px] mx-auto px-4 sm:px-6 text-center">
             <div className="flex items-center justify-center gap-2 mb-4 text-tech-blue font-bold text-lg">
                 <Layers size={24} />
                 <span>全国医保影像AI识别大赛</span>
@@ -2093,7 +2095,7 @@ export default function App() {
               清空
             </button>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
             {STATUS_ORDER.map((status) => (
               <label
                 key={status}
@@ -2157,7 +2159,7 @@ export default function App() {
               <div className="p-12 text-center text-slate-400 text-sm">暂无待审核任务</div>
             ) : (
               <div className="max-h-[62vh] overflow-auto">
-                <table className="min-w-full text-sm">
+                <table className="min-w-[980px] w-full text-sm">
                   <thead className="bg-slate-50 text-slate-500">
                     <tr>
                       <th className="text-left px-4 py-3">阶段 / 分组</th>
@@ -2243,7 +2245,7 @@ export default function App() {
               <div className="p-12 text-center text-slate-400 text-sm">暂无审核结果</div>
             ) : (
               <div className="max-h-[62vh] overflow-auto">
-                <table className="min-w-full text-sm">
+                <table className="min-w-[860px] w-full text-sm">
                   <thead className="bg-slate-50 text-slate-500">
                     <tr>
                       <th className="text-left px-4 py-3">阶段 / 分组</th>
@@ -2302,7 +2304,7 @@ export default function App() {
               onChange={e => setTaskForm({...taskForm, description: e.target.value})}
             />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">责任组</label>
               <input 
