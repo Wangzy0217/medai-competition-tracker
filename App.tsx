@@ -1180,6 +1180,7 @@ export default function App() {
   };
 
   const selectedExportStatuses = STATUS_ORDER.filter((status) => exportStatusSelection[status]);
+  const PDF_ROWS_PER_PAGE = 25;
   const exportRows = data.flatMap((phase) =>
     phase.mainTasks.flatMap((mainTask) =>
       mainTask.subTasks
@@ -1233,83 +1234,103 @@ export default function App() {
     const selectedLabels = selectedExportStatuses.map((status) => STATUS_CONFIG[status].label).join('、');
     const nowForHeader = new Date();
     const exportDateTitle = `${nowForHeader.getFullYear()}.${String(nowForHeader.getMonth() + 1).padStart(2, '0')}.${String(nowForHeader.getDate()).padStart(2, '0')}`;
+    const exportTimeTitle = `${String(nowForHeader.getHours()).padStart(2, '0')}:${String(nowForHeader.getMinutes()).padStart(2, '0')}`;
     try {
       const [{ default: html2canvas }, { jsPDF }] = await Promise.all([import('html2canvas'), import('jspdf')]);
-      const host = document.createElement('div');
-      host.style.position = 'fixed';
-      host.style.left = '-10000px';
-      host.style.top = '0';
-      host.style.width = '1180px';
-      host.style.padding = '28px';
-      host.style.background = '#ffffff';
-      host.style.color = '#0f172a';
-      host.style.fontFamily = '"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
+      const pagedRows: typeof exportRows[] = [];
+      for (let i = 0; i < exportRows.length; i += PDF_ROWS_PER_PAGE) {
+        pagedRows.push(exportRows.slice(i, i + PDF_ROWS_PER_PAGE));
+      }
 
-      const tableRowsHtml = exportRows
-        .map(
-          (row, index) => `
-            <tr data-status="${row.status}">
-              <td>${index + 1}</td>
-              <td>${escapeHtml(row.phaseTitle)}</td>
-              <td>${escapeHtml(row.mainTaskTitle)}</td>
-              <td>${escapeHtml(row.description)}</td>
-              <td>${escapeHtml(row.group)}</td>
-              <td>${escapeHtml(row.ownerName)}</td>
-              <td>${escapeHtml(row.deadline)}</td>
-              <td class="pdf-status">${escapeHtml(STATUS_CONFIG[row.status].label)}</td>
-            </tr>
-          `
-        )
-        .join('');
+      if (document.fonts?.ready) {
+        await document.fonts.ready;
+      }
 
-      host.innerHTML = `
-        <style>
-          .pdf-header { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; margin-bottom: 8px; }
-          .pdf-title, .pdf-date { font-size: 28px; font-weight: 700; color: #0f172a; line-height: 1.2; }
-          .pdf-subtitle { font-size: 14px; color: #475569; margin-bottom: 6px; }
-          .pdf-section { margin-top: 18px; }
-          .pdf-badge { display: inline-block; margin-right: 8px; margin-top: 6px; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid transparent; }
-          .pdf-badge[data-status="PENDING"] { background: #f1f5f9; color: #64748b; border-color: #cbd5e1; }
-          .pdf-badge[data-status="IN_PROGRESS"] { background: #e0f2fe; color: #0369a1; border-color: #7dd3fc; }
-          .pdf-badge[data-status="WARNING"] { background: #fef3c7; color: #a16207; border-color: #fcd34d; }
-          .pdf-badge[data-status="RISK"] { background: #ffedd5; color: #c2410c; border-color: #fdba74; }
-          .pdf-badge[data-status="COMPLETED"] { background: #dcfce7; color: #047857; border-color: #86efac; }
-          .pdf-badge[data-status="REVIEWING"] { background: #cffafe; color: #0e7490; border-color: #67e8f9; }
-          table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 12px; }
-          th, td { border: 1px solid #e2e8f0; padding: 8px 10px; font-size: 12px; line-height: 1.5; vertical-align: top; word-break: break-word; }
-          th { background: #f8fafc; color: #334155; font-weight: 700; }
-          tbody tr[data-status="PENDING"] td { color: #64748b; }
-          tbody tr[data-status="IN_PROGRESS"] td { color: #0369a1; }
-          tbody tr[data-status="WARNING"] td { color: #a16207; }
-          tbody tr[data-status="RISK"] td { color: #c2410c; }
-          tbody tr[data-status="COMPLETED"] td { color: #047857; }
-          tbody tr[data-status="REVIEWING"] td { color: #0e7490; }
-          .pdf-status { font-weight: 700; }
-          th:nth-child(1), td:nth-child(1) { width: 44px; text-align: center; }
-          th:nth-child(2), td:nth-child(2) { width: 120px; }
-          th:nth-child(3), td:nth-child(3) { width: 140px; }
-          th:nth-child(4), td:nth-child(4) { width: auto; }
-          th:nth-child(5), td:nth-child(5) { width: 110px; }
-          th:nth-child(6), td:nth-child(6) { width: 90px; }
-          th:nth-child(7), td:nth-child(7) { width: 90px; }
-          th:nth-child(8), td:nth-child(8) { width: 92px; text-align: center; }
-        </style>
-        <div class="pdf-header">
-          <div class="pdf-title">全国医保影像AI识图大赛 进度管理表</div>
-          <div class="pdf-date">${escapeHtml(exportDateTitle)}</div>
-        </div>
-        <div class="pdf-subtitle">状态筛选：${escapeHtml(selectedLabels)}</div>
-        <div class="pdf-subtitle">任务总数：${exportRows.length}</div>
-        <div class="pdf-section">
-          ${selectedExportStatuses.map((status) => `<span class="pdf-badge" data-status="${status}">${escapeHtml(STATUS_CONFIG[status].label)}（${statusCounts[status]}）</span>`).join('')}
-        </div>
-        <div class="pdf-section">
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 6;
+      const usableWidth = pageWidth - margin * 2;
+      const usableHeight = pageHeight - margin * 2;
+
+      for (let pageIndex = 0; pageIndex < pagedRows.length; pageIndex += 1) {
+        const rows = pagedRows[pageIndex];
+        const tableRowsHtml = rows
+          .map(
+            (row, index) => `
+              <tr data-status="${row.status}">
+                <td>${pageIndex * PDF_ROWS_PER_PAGE + index + 1}</td>
+                <td>${escapeHtml(row.phaseTitle)}</td>
+                <td>${escapeHtml(row.mainTaskTitle)}</td>
+                <td class="pdf-desc">${escapeHtml(row.description)}</td>
+                <td>${escapeHtml(row.group)}</td>
+                <td>${escapeHtml(row.ownerName)}</td>
+                <td>${escapeHtml(row.deadline)}</td>
+                <td class="pdf-status">${escapeHtml(STATUS_CONFIG[row.status].label)}</td>
+              </tr>
+            `
+          )
+          .join('');
+
+        const host = document.createElement('div');
+        host.style.position = 'fixed';
+        host.style.left = '-10000px';
+        host.style.top = '0';
+        host.style.width = '1120px';
+        host.style.padding = '20px';
+        host.style.background = '#ffffff';
+        host.style.color = '#0f172a';
+        host.style.fontFamily = '"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
+        host.innerHTML = `
+          <style>
+            .pdf-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 2px solid #dbeafe; }
+            .pdf-title { font-size: 26px; font-weight: 800; line-height: 1.2; color: #0f172a; margin-bottom: 6px; }
+            .pdf-subtitle { font-size: 14px; color: #334155; line-height: 1.5; }
+            .pdf-date { font-size: 20px; font-weight: 700; text-align: right; color: #0f172a; line-height: 1.2; }
+            .pdf-page-index { font-size: 13px; font-weight: 600; color: #475569; margin-top: 4px; text-align: right; }
+            table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 8px; }
+            th, td { border: 1px solid #dbe3ef; padding: 9px 10px; font-size: 13px; line-height: 1.45; vertical-align: top; word-break: break-word; }
+            th { background: #f1f5f9; color: #1e293b; font-weight: 700; }
+            tbody tr[data-status="PENDING"] td { color: #64748b; }
+            tbody tr[data-status="IN_PROGRESS"] td { color: #0369a1; }
+            tbody tr[data-status="WARNING"] td { color: #a16207; }
+            tbody tr[data-status="RISK"] td { color: #c2410c; }
+            tbody tr[data-status="COMPLETED"] td { color: #047857; }
+            tbody tr[data-status="REVIEWING"] td { color: #0e7490; }
+            .pdf-status { font-weight: 700; text-align: center; }
+            .pdf-desc {
+              display: -webkit-box;
+              -webkit-line-clamp: 2;
+              -webkit-box-orient: vertical;
+              overflow: hidden;
+            }
+            .pdf-footer { margin-top: 8px; text-align: right; font-size: 12px; color: #64748b; }
+            th:nth-child(1), td:nth-child(1) { width: 48px; text-align: center; }
+            th:nth-child(2), td:nth-child(2) { width: 112px; }
+            th:nth-child(3), td:nth-child(3) { width: 132px; }
+            th:nth-child(4), td:nth-child(4) { width: auto; }
+            th:nth-child(5), td:nth-child(5) { width: 106px; }
+            th:nth-child(6), td:nth-child(6) { width: 86px; }
+            th:nth-child(7), td:nth-child(7) { width: 100px; text-align: center; }
+            th:nth-child(8), td:nth-child(8) { width: 90px; text-align: center; }
+          </style>
+          <div class="pdf-header">
+            <div>
+              <div class="pdf-title">全国医保影像AI识图大赛 进度管理表</div>
+              <div class="pdf-subtitle">状态筛选：${escapeHtml(selectedLabels)}</div>
+              <div class="pdf-subtitle">任务总数：${exportRows.length} ｜ 每页：${PDF_ROWS_PER_PAGE} 条</div>
+            </div>
+            <div>
+              <div class="pdf-date">${escapeHtml(exportDateTitle)} ${escapeHtml(exportTimeTitle)}</div>
+              <div class="pdf-page-index">第 ${pageIndex + 1} / ${pagedRows.length} 页</div>
+            </div>
+          </div>
           <table>
             <thead>
               <tr>
                 <th>#</th>
                 <th>阶段</th>
-                <th>分组</th>
+                <th>主任务</th>
                 <th>任务描述</th>
                 <th>责任组</th>
                 <th>责任人</th>
@@ -1319,41 +1340,40 @@ export default function App() {
             </thead>
             <tbody>${tableRowsHtml}</tbody>
           </table>
-        </div>
-      `;
-      document.body.appendChild(host);
-      try {
-        if (document.fonts?.ready) {
-          await document.fonts.ready;
+          <div class="pdf-footer">导出时间：${escapeHtml(exportDateTitle)} ${escapeHtml(exportTimeTitle)}</div>
+        `;
+        document.body.appendChild(host);
+        try {
+          const canvas = await html2canvas(host, {
+            scale: 2,
+            backgroundColor: '#ffffff',
+            useCORS: true,
+            windowWidth: 1200,
+          });
+
+          if (pageIndex > 0) {
+            pdf.addPage();
+          }
+
+          const imageData = canvas.toDataURL('image/jpeg', 0.95);
+          let imageWidth = usableWidth;
+          let imageHeight = (canvas.height * imageWidth) / canvas.width;
+          if (imageHeight > usableHeight) {
+            const ratio = usableHeight / imageHeight;
+            imageWidth *= ratio;
+            imageHeight = usableHeight;
+          }
+          const x = margin + (usableWidth - imageWidth) / 2;
+          const y = margin + (usableHeight - imageHeight) / 2;
+          pdf.addImage(imageData, 'JPEG', x, y, imageWidth, imageHeight, undefined, 'FAST');
+        } finally {
+          document.body.removeChild(host);
         }
-        const canvas = await html2canvas(host, { scale: 2, backgroundColor: '#ffffff', useCORS: true, windowWidth: 1280 });
-        const pdf = new jsPDF('p', 'mm', 'a4');
-        const pageWidth = pdf.internal.pageSize.getWidth();
-        const pageHeight = pdf.internal.pageSize.getHeight();
-        const margin = 8;
-        const imageWidth = pageWidth - margin * 2;
-        const imageHeight = (canvas.height * imageWidth) / canvas.width;
-        const usablePageHeight = pageHeight - margin * 2;
-        const imageData = canvas.toDataURL('image/png');
-
-        let heightLeft = imageHeight;
-        let position = margin;
-        pdf.addImage(imageData, 'PNG', margin, position, imageWidth, imageHeight, undefined, 'FAST');
-        heightLeft -= usablePageHeight;
-
-        while (heightLeft > 0) {
-          pdf.addPage();
-          position = margin - (imageHeight - heightLeft);
-          pdf.addImage(imageData, 'PNG', margin, position, imageWidth, imageHeight, undefined, 'FAST');
-          heightLeft -= usablePageHeight;
-        }
-
-        const now = new Date();
-        const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
-        pdf.save(`任务状态导出_${stamp}.pdf`);
-      } finally {
-        document.body.removeChild(host);
       }
+
+      const now = new Date();
+      const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
+      pdf.save(`任务状态导出_${stamp}.pdf`);
 
       setActiveModal(null);
       showToast('success', 'PDF 导出成功');
@@ -2116,6 +2136,9 @@ export default function App() {
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
             已选状态：<span className="font-semibold text-slate-800">{selectedExportStatuses.length}</span> 个
             ，可导出任务：<span className="font-semibold text-tech-blue">{exportRows.length}</span> 条
+          </div>
+          <div className="text-xs text-slate-500">
+            导出设置：默认每页 25 条任务，已优化为整页适配并提升打印字号。
           </div>
           <div className="flex items-center justify-end gap-2 pt-1">
             <button
