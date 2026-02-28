@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { Phase, Status, MainTask } from './types';
 import { STATUS_CONFIG, STATUS_ORDER } from './constants';
 import { 
-  CheckCircle2, RotateCcw, Save, Layers, Download, Clock, AlertTriangle, AlertCircle, Pause, Play,
-  ChevronDown, Users, Briefcase, Calendar, Plus, Trash2, Edit2, X, MoreVertical 
+  CheckCircle2, Save, Layers, Download, Clock, AlertTriangle, AlertCircle, Pause, Play,
+  ChevronDown, Users, Briefcase, Calendar, Plus, Trash2, Edit2, X, MoreVertical, MessageSquarePlus, NotebookTabs
 } from 'lucide-react';
 import { io } from 'socket.io-client';
 
@@ -34,6 +35,25 @@ const DEFAULT_EXPORT_STATUS_SELECTION: Record<Status, boolean> = {
   [Status.REVIEWING]: true,
   [Status.RISK]: true,
   [Status.COMPLETED]: true,
+};
+
+type FeatureRequestStatus =
+  | 'PENDING'
+  | 'NEEDS_CHANGE'
+  | 'NO_CHANGE'
+  | 'RESPONDED'
+  | 'PLANNED'
+  | 'DONE'
+  | 'REJECTED';
+
+const FEATURE_REQUEST_STATUS_CONFIG: Record<FeatureRequestStatus, { label: string; badgeClass: string }> = {
+  PENDING: { label: '待响应', badgeClass: 'bg-amber-50 text-amber-700 border-amber-200' },
+  NEEDS_CHANGE: { label: '需修改', badgeClass: 'bg-rose-50 text-rose-700 border-rose-200' },
+  NO_CHANGE: { label: '无需修改', badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  RESPONDED: { label: '已回复', badgeClass: 'bg-sky-50 text-sky-700 border-sky-200' },
+  PLANNED: { label: '已纳入计划', badgeClass: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
+  DONE: { label: '已完成', badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  REJECTED: { label: '暂不采纳', badgeClass: 'bg-slate-100 text-slate-600 border-slate-200' },
 };
 
 const StatusSelect = ({
@@ -136,6 +156,32 @@ const Toast = ({ type, message }: { type: 'success' | 'error'; message: string }
   );
 };
 
+const HeaderIconButton = ({
+  onClick,
+  tooltip,
+  children,
+  badge,
+}: {
+  onClick: () => void;
+  tooltip: string;
+  children: React.ReactNode;
+  badge?: React.ReactNode;
+}) => {
+  return (
+    <button
+      onClick={onClick}
+      aria-label={tooltip}
+      className="group relative p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-400 hover:text-slate-600"
+    >
+      {children}
+      {badge}
+      <span className="pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-2 whitespace-nowrap rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 shadow-lg opacity-0 translate-y-1 transition-all duration-150 group-hover:opacity-100 group-hover:translate-y-0">
+        {tooltip}
+      </span>
+    </button>
+  );
+};
+
 const StatCard = ({ title, value, total, colorClass, icon: Icon, hover }: any) => (
   <div className="relative bg-white p-6 rounded-2xl shadow-sm border border-slate-100 transition-all duration-300 group overflow-hidden hover:shadow-md">
     <div className="flex items-center justify-between transition-all duration-300 group-hover:opacity-0 group-hover:-translate-y-1">
@@ -197,6 +243,223 @@ type ReviewResultItem = {
   decisionLabel: string;
   reviewerName: string;
   reviewedAt: string;
+};
+
+type FeatureRequestReplyItem = {
+  id: number;
+  responderId: number;
+  responderName: string;
+  message: string;
+  createdAt: string;
+};
+
+type FeatureRequestItem = {
+  id: number;
+  title: string;
+  description: string;
+  status: FeatureRequestStatus;
+  statusLabel: string;
+  userId: number;
+  userName: string;
+  userGroup: string;
+  createdAt: string;
+  updatedAt: string;
+  replyCount: number;
+  latestReplyAt: string;
+  replies: FeatureRequestReplyItem[];
+};
+
+type PlatformUpdateItem = {
+  id: number;
+  releaseKey: string;
+  title: string;
+  content: string;
+  generatedBy: string;
+  createdAt: string;
+};
+
+type TaskDependencyOption = {
+  id: string;
+  label: string;
+  meta: string;
+  searchText: string;
+};
+
+type IndexedTask = {
+  id: string;
+  description: string;
+  owner: string;
+  phaseId: string;
+  phaseTitle: string;
+  mainTaskId: string;
+  mainTaskTitle: string;
+  predecessorId?: string | null;
+};
+
+const TaskDependencySelect = ({
+  options,
+  value,
+  onChange,
+  placeholder = '请选择前置任务（可选）',
+}: {
+  options: TaskDependencyOption[];
+  value: string;
+  onChange: (next: string) => void;
+  placeholder?: string;
+}) => {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [panelStyle, setPanelStyle] = useState<{ top: number; left: number; width: number; maxHeight: number }>({
+    top: 0,
+    left: 0,
+    width: 0,
+    maxHeight: 280,
+  });
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const searchRef = useRef<HTMLInputElement | null>(null);
+
+  const selected = useMemo(() => options.find((item) => item.id === value) || null, [options, value]);
+  const filteredOptions = useMemo(() => {
+    const keyword = query.trim().toLowerCase();
+    if (!keyword) return options;
+    return options.filter((item) => item.searchText.includes(keyword));
+  }, [options, query]);
+
+  const updatePanelPosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const below = window.innerHeight - rect.bottom;
+    const above = rect.top;
+    const preferTop = below < 220 && above > below;
+    const maxHeight = Math.max(180, Math.min(320, (preferTop ? above : below) - 16));
+    const top = preferTop ? Math.max(8, rect.top - Math.min(300, maxHeight)) : rect.bottom + 6;
+    setPanelStyle({
+      top,
+      left: rect.left,
+      width: rect.width,
+      maxHeight,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    updatePanelPosition();
+    const handleLayout = () => updatePanelPosition();
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (triggerRef.current?.contains(target)) return;
+      if (target.closest('[data-dependency-panel]')) return;
+      setOpen(false);
+    };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('resize', handleLayout);
+    window.addEventListener('scroll', handleLayout, true);
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      window.removeEventListener('resize', handleLayout);
+      window.removeEventListener('scroll', handleLayout, true);
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [open, updatePanelPosition]);
+
+  useEffect(() => {
+    if (!open) return;
+    const timer = window.setTimeout(() => {
+      searchRef.current?.focus();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [open]);
+
+  const panel = open
+    ? createPortal(
+        <div
+          data-dependency-panel
+          className="fixed z-[220] rounded-xl border border-slate-200 bg-white shadow-2xl overflow-hidden"
+          style={{
+            top: panelStyle.top,
+            left: panelStyle.left,
+            width: panelStyle.width,
+          }}
+        >
+          <div className="p-2 border-b border-slate-100">
+            <input
+              ref={searchRef}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="搜索任务描述 / 阶段 / 分组"
+              className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-tech-blue/40 focus:border-tech-blue outline-none"
+            />
+          </div>
+          <div className="py-1 overflow-auto" style={{ maxHeight: panelStyle.maxHeight }}>
+            <button
+              type="button"
+              onClick={() => {
+                onChange('');
+                setOpen(false);
+                setQuery('');
+              }}
+              className={`w-full text-left px-3 py-2.5 text-sm transition-colors ${
+                !value ? 'bg-blue-50 text-tech-blue font-semibold' : 'text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              无前置任务
+            </button>
+            {filteredOptions.length === 0 ? (
+              <div className="px-3 py-6 text-center text-xs text-slate-400">未找到匹配任务</div>
+            ) : (
+              filteredOptions.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => {
+                    onChange(item.id);
+                    setOpen(false);
+                    setQuery('');
+                  }}
+                  className={`w-full text-left px-3 py-2.5 transition-colors ${
+                    value === item.id ? 'bg-blue-50' : 'hover:bg-slate-50'
+                  }`}
+                >
+                  <div className={`text-sm leading-snug ${value === item.id ? 'text-tech-blue font-semibold' : 'text-slate-700'}`}>
+                    {item.label}
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-slate-400">{item.meta}</div>
+                </button>
+              ))
+            )}
+          </div>
+        </div>,
+        document.body
+      )
+    : null;
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        className="w-full text-left px-3 py-2 border border-slate-300 rounded-lg bg-white hover:bg-slate-50 focus:ring-2 focus:ring-tech-blue/50 focus:border-tech-blue outline-none transition-colors"
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div className={`text-sm truncate ${selected ? 'text-slate-700' : 'text-slate-400'}`}>
+              {selected ? selected.label : placeholder}
+            </div>
+            <div className="text-[11px] text-slate-400 truncate">{selected ? selected.meta : '未设置依赖关系'}</div>
+          </div>
+          <ChevronDown size={16} className={`shrink-0 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+        </div>
+      </button>
+      {panel}
+    </>
+  );
 };
 
 const Avatar = ({ seed, name }: { seed: string; name: string }) => {
@@ -633,17 +896,42 @@ export default function App() {
   const [openActionId, setOpenActionId] = useState<string | null>(null);
   const [pendingReviews, setPendingReviews] = useState<PendingReviewItem[]>([]);
   const [reviewResults, setReviewResults] = useState<ReviewResultItem[]>([]);
+  const [featureRequests, setFeatureRequests] = useState<FeatureRequestItem[]>([]);
+  const [platformUpdates, setPlatformUpdates] = useState<PlatformUpdateItem[]>([]);
+  const [featureLoading, setFeatureLoading] = useState(false);
+  const [platformUpdatesLoading, setPlatformUpdatesLoading] = useState(false);
+  const [featureSubmitting, setFeatureSubmitting] = useState(false);
+  const [featureStatusUpdatingId, setFeatureStatusUpdatingId] = useState<number | null>(null);
+  const [featureForm, setFeatureForm] = useState({ title: '', description: '' });
+  const [featureStatusDrafts, setFeatureStatusDrafts] = useState<Record<number, FeatureRequestStatus>>({});
   const [reviewResultsSeenAt, setReviewResultsSeenAt] = useState(0);
   const [reviewActionLoadingId, setReviewActionLoadingId] = useState<string | null>(null);
+  const [hoverDependencySourceId, setHoverDependencySourceId] = useState<string | null>(null);
+  const [dependencyPath, setDependencyPath] = useState<string | null>(null);
+  const [dependencyPathMarks, setDependencyPathMarks] = useState<{ startX: number; startY: number; endX: number; endY: number } | null>(null);
+  const taskCanvasRef = useRef<HTMLDivElement | null>(null);
+  const taskRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const taskDotRefs = useRef<Record<string, HTMLSpanElement | null>>({});
   
   // Modal States
-  const [activeModal, setActiveModal] = useState<'task' | 'group' | 'review-complete' | 'review-center' | 'review-results' | 'export-pdf' | null>(null);
+  const [activeModal, setActiveModal] = useState<
+    'task' |
+    'group' |
+    'review-complete' |
+    'review-center' |
+    'review-results' |
+    'feature-center' |
+    'feature-create' |
+    'platform-updates' |
+    'export-pdf' |
+    null
+  >(null);
   const [modalTarget, setModalTarget] = useState<{ phaseId: string, mainTaskId?: string, subTaskId?: string, type?: 'add' | 'edit' }>({ phaseId: '' });
   const [reviewTarget, setReviewTarget] = useState<{ subTaskId: string; fromStatus: Status } | null>(null);
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   
   // Form States
-  const [taskForm, setTaskForm] = useState({ description: '', group: '', name: '', deadline: '' });
+  const [taskForm, setTaskForm] = useState({ description: '', group: '', name: '', deadline: '', predecessorId: '' });
   const [groupForm, setGroupForm] = useState({ title: '', dateRange: '' });
 
   // --- Effects ---
@@ -703,6 +991,56 @@ export default function App() {
     }
   }, [apiRequest, token, user]);
 
+  const fetchFeatureRequests = useCallback(async () => {
+    if (!token || !user) {
+      setFeatureRequests([]);
+      return;
+    }
+    setFeatureLoading(true);
+    try {
+      const res = await apiRequest('/api/feature-requests');
+      const payload = await res.json();
+      if (Array.isArray(payload)) {
+        const list = payload as FeatureRequestItem[];
+        setFeatureRequests(list);
+        setFeatureStatusDrafts((prev) => {
+          const next = { ...prev };
+          list.forEach((item) => {
+            next[item.id] = item.status;
+          });
+          return next;
+        });
+      } else {
+        setFeatureRequests([]);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setFeatureLoading(false);
+    }
+  }, [apiRequest, token, user]);
+
+  const fetchPlatformUpdates = useCallback(async () => {
+    if (!token || !user) {
+      setPlatformUpdates([]);
+      return;
+    }
+    setPlatformUpdatesLoading(true);
+    try {
+      const res = await apiRequest('/api/platform-updates?limit=40');
+      const payload = await res.json();
+      if (Array.isArray(payload)) {
+        setPlatformUpdates(payload as PlatformUpdateItem[]);
+      } else {
+        setPlatformUpdates([]);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setPlatformUpdatesLoading(false);
+    }
+  }, [apiRequest, token, user]);
+
   const fetchData = useCallback(async () => {
     if (!token) return;
     try {
@@ -737,6 +1075,14 @@ export default function App() {
   useEffect(() => {
     fetchReviewResults();
   }, [fetchReviewResults, data]);
+
+  useEffect(() => {
+    fetchFeatureRequests();
+  }, [fetchFeatureRequests]);
+
+  useEffect(() => {
+    fetchPlatformUpdates();
+  }, [fetchPlatformUpdates]);
 
   useEffect(() => {
     if (!user || user.role !== 'user') {
@@ -893,15 +1239,67 @@ export default function App() {
     setActiveModal('export-pdf');
   };
 
-  const resetData = async () => {
-    if (!confirm('确定要重置所有进度到初始状态吗？此操作无法撤销。')) return;
-    try {
-      await apiRequest('/api/reset', { method: 'POST' });
-      await fetchData();
-    } catch (e) {
-      alert('重置失败，请检查后端');
-    }
+  const openFeatureCenterModal = () => {
+    setActiveModal('feature-center');
+    fetchFeatureRequests();
   };
+
+  const openFeatureCreateModal = () => {
+    setFeatureForm({ title: '', description: '' });
+    setActiveModal('feature-create');
+  };
+
+  const openPlatformUpdatesModal = () => {
+    setActiveModal('platform-updates');
+    fetchPlatformUpdates();
+  };
+
+  const submitFeatureRequest = useCallback(async () => {
+    const title = featureForm.title.trim();
+    const description = featureForm.description.trim();
+    if (!title || !description) {
+      showToast('error', '请完整填写需求标题和需求描述');
+      return;
+    }
+    setFeatureSubmitting(true);
+    try {
+      await apiRequest('/api/feature-requests', {
+        method: 'POST',
+        body: JSON.stringify({ title, description }),
+      });
+      setFeatureForm({ title: '', description: '' });
+      setActiveModal('feature-center');
+      await fetchFeatureRequests();
+      showToast('success', '需求已提交，等待管理员回复');
+    } catch (e) {
+      const message = e instanceof Error ? e.message : '未知错误';
+      showToast('error', `提交需求失败：${message}`);
+    } finally {
+      setFeatureSubmitting(false);
+    }
+  }, [apiRequest, featureForm.description, featureForm.title, fetchFeatureRequests, showToast]);
+
+  const markFeatureRequestStatus = useCallback(async (requestId: number) => {
+    const status = featureStatusDrafts[requestId];
+    if (!status) {
+      showToast('error', '请选择标注状态');
+      return;
+    }
+    setFeatureStatusUpdatingId(requestId);
+    try {
+      await apiRequest(`/api/feature-requests/${requestId}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      });
+      await fetchFeatureRequests();
+      showToast('success', '需求状态已标注');
+    } catch (e) {
+      const messageText = e instanceof Error ? e.message : '未知错误';
+      showToast('error', `标注失败：${messageText}`);
+    } finally {
+      setFeatureStatusUpdatingId(null);
+    }
+  }, [apiRequest, featureStatusDrafts, fetchFeatureRequests, showToast]);
 
   const normalizeStatusValue = (value: Status | string) => {
     if (!value) return null;
@@ -1036,7 +1434,7 @@ export default function App() {
 
   const openAddTask = (phaseId: string, mainTaskId: string) => {
     setModalTarget({ phaseId, mainTaskId, type: 'add' });
-    setTaskForm({ description: '', group: '通用', name: '', deadline: '' });
+    setTaskForm({ description: '', group: '通用', name: '', deadline: '', predecessorId: '' });
     setActiveModal('task');
   };
 
@@ -1047,7 +1445,8 @@ export default function App() {
       description: subTask.description,
       group: owner.group,
       name: owner.name,
-      deadline: toInputDate(subTask.deadline)
+      deadline: toInputDate(subTask.deadline),
+      predecessorId: subTask.predecessorId || ''
     });
     setActiveModal('task');
   };
@@ -1078,7 +1477,8 @@ export default function App() {
           body: JSON.stringify({
             description: taskForm.description,
             owner: owner,
-            deadline: taskForm.deadline
+            deadline: taskForm.deadline,
+            predecessorId: taskForm.predecessorId || null
           })
         });
       } else {
@@ -1089,6 +1489,7 @@ export default function App() {
             description: taskForm.description,
             owner: owner,
             deadline: taskForm.deadline,
+            predecessorId: taskForm.predecessorId || null,
             status: Status.PENDING
           })
         });
@@ -1486,6 +1887,113 @@ export default function App() {
     }
   };
 
+  const indexedTasks = useMemo(() => {
+    const items: IndexedTask[] = [];
+    const byId = new Map<string, IndexedTask>();
+    data.forEach((phase) => {
+      phase.mainTasks.forEach((mainTask) => {
+        mainTask.subTasks.forEach((subTask) => {
+          const item: IndexedTask = {
+            id: subTask.id,
+            description: subTask.description,
+            owner: subTask.owner,
+            phaseId: phase.id,
+            phaseTitle: phase.title,
+            mainTaskId: mainTask.id,
+            mainTaskTitle: mainTask.title,
+            predecessorId: subTask.predecessorId,
+          };
+          items.push(item);
+          byId.set(item.id, item);
+        });
+      });
+    });
+    return { items, byId };
+  }, [data]);
+
+  const predecessorOptions = useMemo<TaskDependencyOption[]>(
+    () =>
+      indexedTasks.items.map((item) => ({
+        id: item.id,
+        label: item.description,
+        meta: `${item.phaseTitle} / ${item.mainTaskTitle}`,
+        searchText: `${item.description} ${item.phaseTitle} ${item.mainTaskTitle} ${item.owner}`.toLowerCase(),
+      })),
+    [indexedTasks]
+  );
+
+  const scrollToTask = useCallback((taskId: string) => {
+    const focusTask = () => {
+      const row = taskRowRefs.current[taskId];
+      if (!row) return false;
+      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      row.classList.remove('dependency-target-flash');
+      window.requestAnimationFrame(() => row.classList.add('dependency-target-flash'));
+      window.setTimeout(() => row.classList.remove('dependency-target-flash'), 1400);
+      return true;
+    };
+
+    if (focusTask()) return;
+    setStatusFilter('ALL');
+    setTaskScopeFilter('ALL');
+    window.setTimeout(() => {
+      if (!focusTask()) {
+        showToast('error', '未定位到前置任务，可能已被删除');
+      }
+    }, 120);
+  }, [showToast]);
+
+  const updateDependencyPath = useCallback(() => {
+    if (!hoverDependencySourceId) {
+      setDependencyPath(null);
+      setDependencyPathMarks(null);
+      return;
+    }
+    const sourceTask = indexedTasks.byId.get(hoverDependencySourceId);
+    const predecessorId = sourceTask?.predecessorId || null;
+    if (!predecessorId) {
+      setDependencyPath(null);
+      setDependencyPathMarks(null);
+      return;
+    }
+    const sourceDot = taskDotRefs.current[hoverDependencySourceId];
+    const targetDot = taskDotRefs.current[predecessorId];
+    const canvas = taskCanvasRef.current;
+    if (!sourceDot || !targetDot || !canvas) {
+      setDependencyPath(null);
+      setDependencyPathMarks(null);
+      return;
+    }
+
+    const canvasRect = canvas.getBoundingClientRect();
+    const sourceRect = sourceDot.getBoundingClientRect();
+    const targetRect = targetDot.getBoundingClientRect();
+    const startX = sourceRect.left + sourceRect.width / 2 - canvasRect.left;
+    const startY = sourceRect.top + sourceRect.height / 2 - canvasRect.top;
+    const endX = targetRect.left + targetRect.width / 2 - canvasRect.left;
+    const endY = targetRect.top + targetRect.height / 2 - canvasRect.top;
+    const curve = Math.max(40, Math.min(180, Math.abs(endY - startY) * 0.22 + 70));
+    const controlStartX = startX - curve;
+    const controlEndX = endX - curve;
+    setDependencyPath(`M ${startX} ${startY} C ${controlStartX} ${startY}, ${controlEndX} ${endY}, ${endX} ${endY}`);
+    setDependencyPathMarks({ startX, startY, endX, endY });
+  }, [hoverDependencySourceId, indexedTasks]);
+
+  useEffect(() => {
+    updateDependencyPath();
+  }, [updateDependencyPath, data, statusFilter, taskScopeFilter]);
+
+  useEffect(() => {
+    if (!hoverDependencySourceId) return;
+    const handleLayout = () => updateDependencyPath();
+    window.addEventListener('resize', handleLayout);
+    window.addEventListener('scroll', handleLayout, true);
+    return () => {
+      window.removeEventListener('resize', handleLayout);
+      window.removeEventListener('scroll', handleLayout, true);
+    };
+  }, [hoverDependencySourceId, updateDependencyPath]);
+
   const statusCounts = {
     [Status.PENDING]: stats.pending,
     [Status.IN_PROGRESS]: stats.inProgress,
@@ -1499,6 +2007,9 @@ export default function App() {
       const ts = Date.parse(item.reviewedAt);
       return Number.isFinite(ts) && ts > reviewResultsSeenAt ? count + 1 : count;
     }, 0)
+    : 0;
+  const pendingFeatureRequestsCount = user?.role === 'admin'
+    ? featureRequests.filter((item) => item.status === 'PENDING').length
     : 0;
   const matchTaskScope = (owner: string) => {
     if (taskScopeFilter === 'ALL') return true;
@@ -1626,6 +2137,20 @@ export default function App() {
           animation: toastSheen 1.8s ease-in-out infinite;
           pointer-events: none;
         }
+        @keyframes dependencyLinePulse {
+          0%, 100% { opacity: 0.45; }
+          50% { opacity: 0.85; }
+        }
+        @keyframes dependencyTargetFlash {
+          0% { box-shadow: 0 0 0 0 rgba(30, 64, 175, 0.35); background-color: rgba(239, 246, 255, 0.9); }
+          100% { box-shadow: 0 0 0 18px rgba(30, 64, 175, 0); background-color: transparent; }
+        }
+        .dependency-link-path {
+          animation: dependencyLinePulse 1.6s ease-in-out infinite;
+        }
+        .dependency-target-flash {
+          animation: dependencyTargetFlash 1.2s ease-out;
+        }
       `}</style>
       
       {/* --- Sticky Header --- */}
@@ -1652,18 +2177,25 @@ export default function App() {
              <div className="hidden md:block text-xs font-medium text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
                 总进度: <span className="text-tech-blue font-bold">{stats.progress}%</span>
              </div>
-            <button
-              onClick={openExportModal}
-              className="p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-400 hover:text-slate-600"
-              title="导出 PDF"
-            >
+            <HeaderIconButton onClick={openExportModal} tooltip="导出报告">
               <Download size={18} />
-            </button>
-            {user.role === 'admin' && (
-              <button onClick={resetData} className="p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-400 hover:text-slate-600" title="重置数据">
-                <RotateCcw size={18} />
-              </button>
-            )}
+            </HeaderIconButton>
+            <HeaderIconButton
+              onClick={openFeatureCenterModal}
+              tooltip="提报需求"
+              badge={
+                pendingFeatureRequestsCount > 0 ? (
+                  <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none flex items-center justify-center">
+                    {pendingFeatureRequestsCount > 99 ? '99+' : pendingFeatureRequestsCount}
+                  </span>
+                ) : undefined
+              }
+            >
+              <MessageSquarePlus size={18} />
+            </HeaderIconButton>
+            <HeaderIconButton onClick={openPlatformUpdatesModal} tooltip="更新日志">
+              <NotebookTabs size={18} />
+            </HeaderIconButton>
             <div className="flex flex-nowrap sm:flex-wrap items-center gap-2 min-w-0">
               <Avatar seed={avatarSeed} name={user.name} />
               <button
@@ -1971,8 +2503,26 @@ export default function App() {
               </div>
               </div>
 
-              <div className="space-y-8 sm:space-y-16 mt-5">
-                {data.map((phase, pIdx) => (
+              <div ref={taskCanvasRef} className="relative mt-5">
+                <svg className="pointer-events-none absolute inset-0 z-20 w-full h-full overflow-visible">
+                  {dependencyPath && dependencyPathMarks && (
+                    <>
+                      <path
+                        d={dependencyPath}
+                        className="dependency-link-path"
+                        stroke="rgba(37, 99, 235, 0.55)"
+                        strokeWidth={2}
+                        strokeDasharray="5 6"
+                        fill="none"
+                        strokeLinecap="round"
+                      />
+                      <circle cx={dependencyPathMarks.startX} cy={dependencyPathMarks.startY} r={3.5} fill="rgba(37, 99, 235, 0.6)" />
+                      <circle cx={dependencyPathMarks.endX} cy={dependencyPathMarks.endY} r={3.5} fill="rgba(30, 64, 175, 0.8)" />
+                    </>
+                  )}
+                </svg>
+                <div className="relative z-10 space-y-8 sm:space-y-16">
+                  {data.map((phase, pIdx) => (
             <div key={phase.id} id={`phase-${phase.id}`} className="relative scroll-mt-[170px]">
 
               <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-6 relative">
@@ -2066,14 +2616,40 @@ export default function App() {
 
                         {visibleSubTasks.map((subTask) => {
                           const { group, name } = getOwnerInfo(subTask.owner);
+                          const predecessor = subTask.predecessorId ? indexedTasks.byId.get(subTask.predecessorId) : null;
                           return (
-                            <div key={subTask.id} className="p-4 sm:p-6 grid grid-cols-1 md:grid-cols-12 gap-4 items-center hover:bg-blue-50/30 transition-colors group/row relative">
+                            <div
+                              key={subTask.id}
+                              ref={(el) => {
+                                taskRowRefs.current[subTask.id] = el;
+                              }}
+                              className="p-4 sm:p-6 grid grid-cols-1 md:grid-cols-12 gap-4 items-center hover:bg-blue-50/30 transition-colors group/row relative"
+                            >
 
                                 {/* Column 1: Description */}
                                 <div className="md:col-span-4 pr-4 min-w-0">
                                     <div className="flex items-start gap-3 min-w-0">
-                                        <StatusDot status={subTask.status} animated className="mt-1.5 w-3.5 h-3.5 shrink-0 ring-2 ring-white/80" />
-                                        <p className="text-sm sm:text-base font-medium text-slate-700 leading-relaxed">{subTask.description}</p>
+                                        <span
+                                          ref={(el) => {
+                                            taskDotRefs.current[subTask.id] = el;
+                                          }}
+                                          className="mt-1.5 w-3.5 h-3.5 shrink-0 ring-2 ring-white/80 rounded-full"
+                                        >
+                                          <StatusDot status={subTask.status} animated className="w-full h-full" />
+                                        </span>
+                                        <div className="min-w-0">
+                                          <p className="text-sm sm:text-base font-medium text-slate-700 leading-relaxed">{subTask.description}</p>
+                                          {subTask.predecessorId && (
+                                            <button
+                                              type="button"
+                                              onClick={() => scrollToTask(subTask.predecessorId || '')}
+                                              className="mt-1 text-left text-xs text-slate-400 hover:text-tech-blue transition-colors max-w-full truncate"
+                                              title={predecessor?.description || '前置任务已删除'}
+                                            >
+                                              前置任务：{predecessor?.description || '任务已删除'}
+                                            </button>
+                                          )}
+                                        </div>
                                     </div>
                                 </div>
                                 
@@ -2174,6 +2750,7 @@ export default function App() {
           ))}
                 </div>
               </div>
+              </div>
             </div>
         </>
         )}
@@ -2258,6 +2835,174 @@ export default function App() {
             >
               {exportingPdf ? '导出中...' : '导出 PDF'}
             </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* --- Feature Request Modal --- */}
+      <Modal
+        isOpen={activeModal === 'feature-center'}
+        onClose={() => setActiveModal(null)}
+        title="功能需求中心"
+        maxWidthClass="max-w-[96vw] xl:max-w-[1500px]"
+      >
+        <div className="space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm text-slate-600">默认展示历史需求记录，点击右侧按钮可新增需求。</div>
+            <button
+              type="button"
+              onClick={openFeatureCreateModal}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-tech-blue text-white hover:bg-blue-900"
+            >
+              新增需求
+            </button>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 overflow-hidden">
+            {featureLoading ? (
+              <div className="p-10 text-center text-sm text-slate-400">加载中...</div>
+            ) : featureRequests.length === 0 ? (
+              <div className="p-10 text-center text-sm text-slate-400">
+                {user.role === 'admin' ? '暂无需求提报' : '你还没有提交过功能需求'}
+              </div>
+            ) : (
+              <div className="max-h-[44vh] overflow-auto p-2 space-y-1.5">
+                {featureRequests.map((item) => {
+                  const statusConfig = FEATURE_REQUEST_STATUS_CONFIG[item.status] || FEATURE_REQUEST_STATUS_CONFIG.PENDING;
+                  const statusValue = featureStatusDrafts[item.id] || item.status;
+                  return (
+                    <div key={item.id} className="rounded-lg border border-slate-200 bg-white p-2.5">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <div className="text-sm font-semibold text-slate-800">{item.title}</div>
+                          <div className="mt-0.5 text-xs text-slate-400">
+                            提报人：{item.userName} · {item.userGroup} · {formatReviewTime(item.createdAt)}
+                          </div>
+                        </div>
+                        <span className={`inline-flex items-center px-2.5 py-1 rounded-md text-xs font-semibold border ${statusConfig.badgeClass}`}>
+                          {item.statusLabel || statusConfig.label}
+                        </span>
+                      </div>
+
+                      <div className="mt-1.5 text-[13px] text-slate-700 whitespace-pre-wrap leading-snug">
+                        {item.description}
+                      </div>
+
+                      {user.role === 'admin' && (
+                        <div className="mt-2 grid grid-cols-1 sm:grid-cols-[140px_auto] gap-2 items-center">
+                          <select
+                            value={statusValue}
+                            onChange={(e) =>
+                              setFeatureStatusDrafts((prev) => ({
+                                ...prev,
+                                [item.id]: e.target.value as FeatureRequestStatus,
+                              }))
+                            }
+                            className="px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white text-xs focus:ring-2 focus:ring-tech-blue/50 focus:border-tech-blue outline-none"
+                          >
+                            <option value="PENDING">待响应</option>
+                            <option value="NEEDS_CHANGE">需修改</option>
+                            <option value="NO_CHANGE">无需修改</option>
+                          </select>
+                          <div className="flex justify-start sm:justify-end">
+                            <button
+                              type="button"
+                              onClick={() => markFeatureRequestStatus(item.id)}
+                              disabled={featureStatusUpdatingId === item.id}
+                              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-tech-blue text-white hover:bg-blue-900 disabled:opacity-60"
+                            >
+                              {featureStatusUpdatingId === item.id ? '处理中...' : '标注状态'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      </Modal>
+
+      {/* --- Feature Create Modal --- */}
+      <Modal
+        isOpen={activeModal === 'feature-create'}
+        onClose={() => setActiveModal('feature-center')}
+        title="新增需求"
+        maxWidthClass="max-w-[720px]"
+      >
+        <div className="space-y-3">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">需求标题</label>
+            <input
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-tech-blue/50 focus:border-tech-blue outline-none bg-white"
+              value={featureForm.title}
+              onChange={(e) => setFeatureForm((prev) => ({ ...prev, title: e.target.value }))}
+              placeholder="例如：增加批量导入任务能力"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">需求描述</label>
+            <textarea
+              rows={4}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-tech-blue/50 focus:border-tech-blue outline-none bg-white"
+              value={featureForm.description}
+              onChange={(e) => setFeatureForm((prev) => ({ ...prev, description: e.target.value }))}
+              placeholder="请描述使用场景、目标效果以及预期收益"
+            />
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setActiveModal('feature-center')}
+              className="px-4 py-2 text-sm font-semibold rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
+            >
+              返回历史
+            </button>
+            <button
+              type="button"
+              onClick={submitFeatureRequest}
+              disabled={featureSubmitting}
+              className="px-4 py-2 text-sm font-semibold rounded-lg bg-tech-blue text-white hover:bg-blue-900 disabled:opacity-60"
+            >
+              {featureSubmitting ? '提交中...' : '提交需求'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* --- Platform Update Modal --- */}
+      <Modal
+        isOpen={activeModal === 'platform-updates'}
+        onClose={() => setActiveModal(null)}
+        title="平台更新日志"
+        maxWidthClass="max-w-[96vw] xl:max-w-[1400px]"
+      >
+        <div className="space-y-4">
+          <div className="text-sm text-slate-600">
+            每次系统部署后，平台会自动生成一条升级说明，记录功能变化。
+          </div>
+          <div className="rounded-xl border border-slate-200 overflow-hidden">
+            {platformUpdatesLoading ? (
+              <div className="p-10 text-center text-sm text-slate-400">加载中...</div>
+            ) : platformUpdates.length === 0 ? (
+              <div className="p-10 text-center text-sm text-slate-400">暂无更新日志</div>
+            ) : (
+              <div className="max-h-[62vh] overflow-auto p-3 space-y-3">
+                {platformUpdates.map((item) => (
+                  <article key={item.id} className="rounded-xl border border-slate-200 bg-white p-4">
+                    <h4 className="text-base font-semibold text-slate-800">{item.title}</h4>
+                    <div className="mt-1 text-xs text-slate-400">
+                      发布时间：{formatReviewTime(item.createdAt)} · 发布标识：{item.releaseKey}
+                    </div>
+                    <div className="mt-3 text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
+                      {item.content}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </Modal>
@@ -2458,6 +3203,15 @@ export default function App() {
               value={taskForm.deadline}
               onChange={e => setTaskForm({...taskForm, deadline: e.target.value})}
             />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">前置任务</label>
+            <TaskDependencySelect
+              options={predecessorOptions.filter((item) => item.id !== modalTarget.subTaskId)}
+              value={taskForm.predecessorId}
+              onChange={(next) => setTaskForm({ ...taskForm, predecessorId: next })}
+            />
+            <div className="mt-1 text-xs text-slate-400">前置任务未完成时，该任务不能标记为完成。</div>
           </div>
           <button 
             onClick={submitTask}

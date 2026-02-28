@@ -1,6 +1,9 @@
 import os
 import re
+import subprocess
+from datetime import datetime
 from functools import wraps
+from pathlib import Path
 from typing import Callable
 from uuid import uuid4
 
@@ -9,10 +12,20 @@ from flask_cors import CORS
 from flask_migrate import Migrate
 from flask_socketio import SocketIO
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from sqlalchemy import inspect, text
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from db import db
-from models import AuditLog, MainTask, Phase, SubTask, User
+from models import (
+    AuditLog,
+    FeatureRequest,
+    FeatureRequestReply,
+    MainTask,
+    Phase,
+    PlatformUpdateLog,
+    SubTask,
+    User,
+)
 from seed import seed_if_empty
 from serializers import get_full_data
 
@@ -42,6 +55,75 @@ def create_app():
         "已完成": "COMPLETED",
         "已逾期": "RISK",
     }
+    feature_request_statuses = {
+        "PENDING": "待响应",
+        "NEEDS_CHANGE": "需修改",
+        "NO_CHANGE": "无需修改",
+        "RESPONDED": "已回复",
+        "PLANNED": "已纳入计划",
+        "DONE": "已完成",
+        "REJECTED": "暂不采纳",
+    }
+
+    def resolve_release_key() -> str:
+        stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        env_candidates = [
+            os.getenv("APP_RELEASE_VERSION"),
+            os.getenv("RELEASE_VERSION"),
+            os.getenv("DEPLOY_ID"),
+            os.getenv("GIT_COMMIT"),
+        ]
+        for value in env_candidates:
+            if value and value.strip():
+                return f"env-{value.strip()[:80]}-{stamp}"
+
+        try:
+            repo_root = Path(__file__).resolve().parents[1]
+            result = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=1.5,
+            )
+            commit = (result.stdout or "").strip()
+            if result.returncode == 0 and commit:
+                return f"git-{commit}-{stamp}"
+        except Exception:
+            pass
+
+        return f"startup-{stamp}"
+
+    def build_auto_release_note(release_key: str):
+        now_text = datetime.now().strftime("%Y-%m-%d %H:%M")
+        title = f"平台升级发布 {now_text}"
+        lines = [
+            f"发布标识：{release_key}",
+            "本次升级功能变化：",
+            "1. 新增“功能需求提报”模块，所有用户可提交需求标题与详细描述。",
+            "2. 新增“需求响应机制”，总管理员可对每条需求进行状态响应并给出回复。",
+            "3. 新增“平台更新日志”模块，每次部署后自动生成升级说明并对全员可见。",
+            "4. 持续保留任务进度、审核流与操作日志能力，保障过程可追溯。",
+            "说明：本日志由系统在部署启动时自动生成。",
+        ]
+        return title, "\n".join(lines)
+
+    def ensure_platform_release_log():
+        release_key = resolve_release_key()
+        existed = PlatformUpdateLog.query.filter_by(release_key=release_key).first()
+        if existed:
+            return existed
+        title, content = build_auto_release_note(release_key)
+        entry = PlatformUpdateLog(
+            release_key=release_key,
+            title=title,
+            content=content,
+            generated_by="system",
+        )
+        db.session.add(entry)
+        db.session.commit()
+        return entry
 
     def normalize_status(value):
         if value is None:
@@ -56,10 +138,22 @@ def create_app():
             if raw in status_aliases:
                 return status_aliases[raw]
         return value
+
+    def normalize_task_id(value):
+        if value is None:
+            return None
+        text_value = str(value).strip()
+        return text_value or None
+
     token_serializer = URLSafeTimedSerializer(app.config["SECRET_KEY"])
 
     with app.app_context():
         db.create_all()
+        inspector = inspect(db.engine)
+        sub_task_columns = {column["name"] for column in inspector.get_columns("sub_tasks")}
+        if "predecessor_id" not in sub_task_columns:
+            db.session.execute(text("ALTER TABLE sub_tasks ADD COLUMN predecessor_id VARCHAR(64) NULL"))
+            db.session.commit()
         seed_if_empty()
         if not User.query.filter_by(phone="admin").first():
             admin_user = User(
@@ -72,6 +166,7 @@ def create_app():
             )
             db.session.add(admin_user)
             db.session.commit()
+        ensure_platform_release_log()
 
     def emit_update():
         socketio.emit("data:updated", get_full_data())
@@ -84,6 +179,49 @@ def create_app():
             "group": user.group_name,
             "roleTitle": user.role_title,
             "role": user.role,
+        }
+
+    def feature_request_status_text(value: str | None):
+        if not value:
+            return "待响应"
+        upper = value.strip().upper()
+        return feature_request_statuses.get(upper, upper)
+
+    def serialize_feature_reply(reply: FeatureRequestReply):
+        return {
+            "id": reply.id,
+            "responderId": reply.responder_id,
+            "responderName": reply.responder_name,
+            "message": reply.message,
+            "createdAt": reply.created_at.isoformat() if reply.created_at else "",
+        }
+
+    def serialize_feature_request(item: FeatureRequest):
+        replies = [serialize_feature_reply(reply) for reply in item.replies]
+        return {
+            "id": item.id,
+            "title": item.title,
+            "description": item.description,
+            "status": item.status,
+            "statusLabel": feature_request_status_text(item.status),
+            "userId": item.user_id,
+            "userName": item.user_name,
+            "userGroup": item.user_group,
+            "createdAt": item.created_at.isoformat() if item.created_at else "",
+            "updatedAt": item.updated_at.isoformat() if item.updated_at else "",
+            "replyCount": len(replies),
+            "latestReplyAt": replies[-1]["createdAt"] if replies else "",
+            "replies": replies,
+        }
+
+    def serialize_platform_update(item: PlatformUpdateLog):
+        return {
+            "id": item.id,
+            "releaseKey": item.release_key,
+            "title": item.title,
+            "content": item.content,
+            "generatedBy": item.generated_by,
+            "createdAt": item.created_at.isoformat() if item.created_at else "",
         }
 
     def create_token(user: User):
@@ -179,6 +317,62 @@ def create_app():
             parts.append(f"分组【{short_text(main_task.title)}】")
         parts.append(f"任务【{short_text(sub_task.description)}】")
         return " ".join(parts)
+
+    def predecessor_text(value: object | None) -> str:
+        predecessor_id = normalize_task_id(value)
+        if not predecessor_id:
+            return "无"
+        predecessor = SubTask.query.get(predecessor_id)
+        if not predecessor:
+            return f"任务已不存在（{predecessor_id}）"
+        return short_text(predecessor.description, limit=60)
+
+    def would_create_predecessor_cycle(current_task_id: str, predecessor_id: str | None) -> bool:
+        cursor_id = predecessor_id
+        visited: set[str] = set()
+        while cursor_id:
+            if cursor_id == current_task_id:
+                return True
+            if cursor_id in visited:
+                return False
+            visited.add(cursor_id)
+            cursor_task = SubTask.query.get(cursor_id)
+            if not cursor_task:
+                return False
+            cursor_id = normalize_task_id(cursor_task.predecessor_id)
+        return False
+
+    def completion_block_reason(sub_task: SubTask) -> str | None:
+        predecessor_id = normalize_task_id(sub_task.predecessor_id)
+        if not predecessor_id:
+            return None
+        predecessor = SubTask.query.get(predecessor_id)
+        if not predecessor:
+            return "前置任务不存在，请先重新设置前置任务"
+        if predecessor.status != "COMPLETED":
+            return (
+                f"前置任务【{short_text(predecessor.description, limit=40)}】"
+                f"当前状态为【{status_text(predecessor.status)}】，未完成前无法完成本任务"
+            )
+        return None
+
+    def predecessor_downgrade_block_reason(sub_task: SubTask, next_status: str) -> str | None:
+        if next_status == "COMPLETED":
+            return None
+        blocking_task = (
+            SubTask.query.filter(
+                SubTask.predecessor_id == sub_task.id,
+                SubTask.status.in_(["COMPLETED", "REVIEWING"]),
+            )
+            .order_by(SubTask.order_index.asc())
+            .first()
+        )
+        if not blocking_task:
+            return None
+        return (
+            f"任务【{short_text(blocking_task.description, limit=40)}】依赖当前任务且状态为"
+            f"【{status_text(blocking_task.status)}】；请先调整依赖任务状态或解除前置关系"
+        )
 
     def can_mark_completed(user: User) -> bool:
         return user.role in {"admin", "sub_admin"}
@@ -281,6 +475,9 @@ def create_app():
         "withdraw_completion_review": "撤回完成审核",
         "approve_completion_review": "审核通过",
         "reject_completion_review": "审核驳回",
+        "submit_feature_request": "提交功能需求",
+        "reply_feature_request": "回复功能需求",
+        "mark_feature_request_status": "标注需求状态",
         "reset_data": "重置数据",
     }
 
@@ -481,6 +678,121 @@ def create_app():
             for l in logs
         ])
 
+    @app.get("/api/feature-requests")
+    @require_auth
+    def list_feature_requests(user: User):
+        query = FeatureRequest.query
+        requested_status = (request.args.get("status") or "").strip().upper()
+        if requested_status and requested_status in feature_request_statuses:
+            query = query.filter(FeatureRequest.status == requested_status)
+        if user.role != "admin":
+            query = query.filter(FeatureRequest.user_id == user.id)
+        requests = (
+            query.order_by(FeatureRequest.updated_at.desc(), FeatureRequest.id.desc())
+            .limit(300)
+            .all()
+        )
+        return jsonify([serialize_feature_request(item) for item in requests])
+
+    @app.post("/api/feature-requests")
+    @require_auth
+    def create_feature_request(user: User):
+        payload = request.get_json(force=True) or {}
+        title = (payload.get("title") or "").strip()
+        description = (payload.get("description") or "").strip()
+        if not title or not description:
+            return jsonify({"error": "title and description are required"}), 400
+        if len(title) > 200:
+            return jsonify({"error": "title is too long"}), 400
+
+        feature_request = FeatureRequest(
+            user_id=user.id,
+            user_name=user.name,
+            user_group=user.group_name,
+            title=title,
+            description=description,
+            status="PENDING",
+        )
+        db.session.add(feature_request)
+        db.session.commit()
+        log_action(
+            user,
+            "submit_feature_request",
+            f"提交功能需求【{short_text(title, limit=80)}】",
+        )
+        return jsonify({"id": feature_request.id})
+
+    @app.post("/api/feature-requests/<int:feature_request_id>/reply")
+    @require_admin
+    def reply_feature_request(admin_user: User, feature_request_id: int):
+        payload = request.get_json(force=True) or {}
+        message = (payload.get("message") or "").strip()
+        status = str(payload.get("status") or "RESPONDED").strip().upper()
+        if not message:
+            return jsonify({"error": "message is required"}), 400
+        if status not in feature_request_statuses:
+            return jsonify({"error": "invalid status"}), 400
+
+        feature_request = FeatureRequest.query.get_or_404(feature_request_id)
+        reply = FeatureRequestReply(
+            feature_request_id=feature_request.id,
+            responder_id=admin_user.id,
+            responder_name=admin_user.name,
+            message=message,
+        )
+        feature_request.status = status
+        db.session.add(reply)
+        db.session.commit()
+        log_action(
+            admin_user,
+            "reply_feature_request",
+            (
+                f"回复功能需求#{feature_request.id}【{short_text(feature_request.title, limit=50)}】；"
+                f"状态【{feature_request_status_text(status)}】；"
+                f"内容【{short_text(message, limit=80)}】"
+            ),
+        )
+        return jsonify({"ok": True})
+
+    @app.patch("/api/feature-requests/<int:feature_request_id>/status")
+    @require_admin
+    def mark_feature_request_status(admin_user: User, feature_request_id: int):
+        payload = request.get_json(force=True) or {}
+        status = str(payload.get("status") or "").strip().upper()
+        if status not in feature_request_statuses:
+            return jsonify({"error": "invalid status"}), 400
+
+        feature_request = FeatureRequest.query.get_or_404(feature_request_id)
+        before_status = feature_request.status
+        feature_request.status = status
+        db.session.commit()
+
+        log_action(
+            admin_user,
+            "mark_feature_request_status",
+            (
+                f"标注功能需求#{feature_request.id}【{short_text(feature_request.title, limit=50)}】："
+                f"由【{feature_request_status_text(before_status)}】改为【{feature_request_status_text(status)}】"
+            ),
+        )
+        return jsonify({"ok": True})
+
+    @app.get("/api/platform-updates")
+    @require_auth
+    def list_platform_updates(user: User):
+        limit_arg = (request.args.get("limit") or "").strip()
+        try:
+            limit = int(limit_arg) if limit_arg else 30
+        except ValueError:
+            limit = 30
+        limit = max(1, min(100, limit))
+        updates = (
+            PlatformUpdateLog.query.order_by(PlatformUpdateLog.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return jsonify([serialize_platform_update(item) for item in updates])
+
     @app.get("/api/phases")
     @require_auth
     def list_phases(user: User):
@@ -656,6 +968,12 @@ def create_app():
     def delete_main_task(user: User, main_task_id):
         main_task = MainTask.query.get_or_404(main_task_id)
         phase = Phase.query.get(main_task.phase_id)
+        sub_task_ids = [row.id for row in SubTask.query.with_entities(SubTask.id).filter_by(main_task_id=main_task_id).all()]
+        if sub_task_ids:
+            SubTask.query.filter(SubTask.predecessor_id.in_(sub_task_ids)).update(
+                {SubTask.predecessor_id: None},
+                synchronize_session=False,
+            )
         detail = (
             f"删除分组【{short_text(main_task.title)}】"
             f"{f'（阶段【{short_text(phase.title)}】）' if phase else ''}，时间【{main_task.date_range}】"
@@ -674,6 +992,7 @@ def create_app():
         description = payload.get("description")
         owner = payload.get("owner")
         deadline = payload.get("deadline")
+        predecessor_id = normalize_task_id(payload.get("predecessorId"))
         status = normalize_status(payload.get("status", "PENDING"))
         if status not in valid_statuses:
             return jsonify({"error": "invalid status", "received": status}), 400
@@ -683,18 +1002,31 @@ def create_app():
             return jsonify({"error": "forbidden"}), 403
         if not main_task_id or not description or not owner or not deadline:
             return jsonify({"error": "mainTaskId, description, owner, deadline are required"}), 400
+        sub_task_id = payload.get("id") or f"st-{uuid4().hex[:8]}"
+        if predecessor_id:
+            predecessor = SubTask.query.get(predecessor_id)
+            if not predecessor:
+                return jsonify({"error": "invalid predecessorId"}), 400
+            if predecessor_id == sub_task_id:
+                return jsonify({"error": "predecessor cannot be self"}), 400
+            if would_create_predecessor_cycle(sub_task_id, predecessor_id):
+                return jsonify({"error": "predecessor cycle detected"}), 400
         order_index = payload.get(
             "orderIndex", SubTask.query.filter_by(main_task_id=main_task_id).count()
         )
         sub_task = SubTask(
-            id=payload.get("id") or f"st-{uuid4().hex[:8]}",
+            id=sub_task_id,
             main_task_id=main_task_id,
+            predecessor_id=predecessor_id,
             description=description,
             owner=owner,
             deadline=deadline,
             status=status,
             order_index=order_index,
         )
+        block_reason = completion_block_reason(sub_task) if status == "COMPLETED" else None
+        if block_reason:
+            return jsonify({"error": block_reason}), 400
         db.session.add(sub_task)
         db.session.commit()
         log_action(
@@ -703,6 +1035,7 @@ def create_app():
             (
                 f"新增任务：{task_context(sub_task)}，"
                 f"责任【{short_text(owner)}】，截止【{deadline}】，状态【{status_text(status)}】"
+                f"，前置任务【{predecessor_text(sub_task.predecessor_id)}】"
             ),
         )
         emit_update()
@@ -719,6 +1052,7 @@ def create_app():
             "deadline": sub_task.deadline,
             "status": sub_task.status,
             "order_index": sub_task.order_index,
+            "predecessor_id": sub_task.predecessor_id,
         }
         if "description" in payload:
             sub_task.description = payload["description"]
@@ -726,6 +1060,17 @@ def create_app():
             sub_task.owner = payload["owner"]
         if "deadline" in payload:
             sub_task.deadline = payload["deadline"]
+        if "predecessorId" in payload:
+            predecessor_id = normalize_task_id(payload.get("predecessorId"))
+            if predecessor_id:
+                predecessor = SubTask.query.get(predecessor_id)
+                if not predecessor:
+                    return jsonify({"error": "invalid predecessorId"}), 400
+                if predecessor_id == sub_task.id:
+                    return jsonify({"error": "predecessor cannot be self"}), 400
+                if would_create_predecessor_cycle(sub_task.id, predecessor_id):
+                    return jsonify({"error": "predecessor cycle detected"}), 400
+            sub_task.predecessor_id = predecessor_id
         if "status" in payload:
             status = normalize_status(payload["status"])
             if status not in valid_statuses:
@@ -743,7 +1088,19 @@ def create_app():
                 return jsonify({"error": "invalid status", "received": status}), 400
             if status == "COMPLETED" and not can_mark_completed(user):
                 return jsonify({"error": "forbidden"}), 403
+            if status != before["status"]:
+                reverse_block_reason = predecessor_downgrade_block_reason(sub_task, status)
+                if reverse_block_reason:
+                    return jsonify({"error": reverse_block_reason}), 400
+            if status in {"COMPLETED", "REVIEWING"}:
+                block_reason = completion_block_reason(sub_task)
+                if block_reason:
+                    return jsonify({"error": block_reason}), 400
             sub_task.status = status
+        if sub_task.status in {"COMPLETED", "REVIEWING"}:
+            block_reason = completion_block_reason(sub_task)
+            if block_reason:
+                return jsonify({"error": block_reason}), 400
         if "orderIndex" in payload:
             sub_task.order_index = payload["orderIndex"]
         db.session.commit()
@@ -753,6 +1110,7 @@ def create_app():
             format_change("截止", before["deadline"], sub_task.deadline),
             format_change("状态", before["status"], sub_task.status, status_text),
             format_change("顺序", before["order_index"], sub_task.order_index),
+            format_change("前置任务", before["predecessor_id"], sub_task.predecessor_id, predecessor_text),
         ]
         detail = "；".join([c for c in changes if c]) or "无变更"
         if before["status"] != sub_task.status and sub_task.status == "REVIEWING":
@@ -789,6 +1147,9 @@ def create_app():
         original_status = extract_review_from_status(review_log.details)
         if original_status not in {"PENDING", "IN_PROGRESS"}:
             original_status = "IN_PROGRESS"
+        reverse_block_reason = predecessor_downgrade_block_reason(sub_task, original_status)
+        if reverse_block_reason:
+            return jsonify({"error": reverse_block_reason}), 400
 
         sub_task.status = original_status
         db.session.commit()
@@ -934,6 +1295,9 @@ def create_app():
 
         review_from_status = review_meta["review_from_status"]
         if decision == "approve":
+            block_reason = completion_block_reason(sub_task)
+            if block_reason:
+                return jsonify({"error": block_reason}), 400
             sub_task.status = "COMPLETED"
             db.session.commit()
             applicant = review_meta["applicant"]
@@ -957,6 +1321,9 @@ def create_app():
         rollback_status = review_from_status
         if rollback_status not in {"PENDING", "IN_PROGRESS"}:
             rollback_status = "IN_PROGRESS"
+        reverse_block_reason = predecessor_downgrade_block_reason(sub_task, rollback_status)
+        if reverse_block_reason:
+            return jsonify({"error": reverse_block_reason}), 400
         sub_task.status = rollback_status
         db.session.commit()
         applicant = review_meta["applicant"]
@@ -981,6 +1348,10 @@ def create_app():
     @require_auth
     def delete_sub_task(user: User, sub_task_id):
         sub_task = SubTask.query.get_or_404(sub_task_id)
+        SubTask.query.filter_by(predecessor_id=sub_task.id).update(
+            {SubTask.predecessor_id: None},
+            synchronize_session=False,
+        )
         detail = (
             f"删除任务：{task_context(sub_task)}，"
             f"责任【{short_text(sub_task.owner)}】，"
@@ -990,18 +1361,6 @@ def create_app():
         db.session.delete(sub_task)
         db.session.commit()
         log_action(user, "delete_task", detail)
-        emit_update()
-        return jsonify({"ok": True})
-
-    @app.post("/api/reset")
-    @require_admin
-    def reset_all(admin_user: User):
-        SubTask.query.delete()
-        MainTask.query.delete()
-        Phase.query.delete()
-        db.session.commit()
-        seed_if_empty()
-        log_action(admin_user, "reset_data", "重置所有阶段/分组/任务数据")
         emit_update()
         return jsonify({"ok": True})
 

@@ -13,6 +13,7 @@ export interface SubTask {
   owner: string;
   deadline: string;
   status: Status;
+  predecessorId?: string | null;
   canWithdrawReview?: boolean;
 }
 

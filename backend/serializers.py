@@ -52,6 +52,7 @@ def serialize_phase(phase: Phase):
                         "owner": st.owner,
                         "deadline": st.deadline,
                         "status": _derive_status(st.status, st.deadline),
+                        "predecessorId": st.predecessor_id,
                     }
                     for st in mt.sub_tasks
                 ],

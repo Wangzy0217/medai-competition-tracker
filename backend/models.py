@@ -41,6 +41,7 @@ class SubTask(db.Model):
 
     id = db.Column(db.String(64), primary_key=True)
     main_task_id = db.Column(db.String(64), db.ForeignKey("main_tasks.id"), nullable=False)
+    predecessor_id = db.Column(db.String(64), nullable=True)
     description = db.Column(db.Text, nullable=False)
     owner = db.Column(db.String(255), nullable=False)
     deadline = db.Column(db.String(64), nullable=False)
@@ -69,4 +70,47 @@ class AuditLog(db.Model):
     user_name = db.Column(db.String(100), nullable=False)
     action = db.Column(db.String(100), nullable=False)
     details = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+
+
+class FeatureRequest(db.Model):
+    __tablename__ = "feature_requests"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    user_name = db.Column(db.String(100), nullable=False)
+    user_group = db.Column(db.String(100), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, nullable=False)
+    status = db.Column(db.String(32), nullable=False, default="PENDING")
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    updated_at = db.Column(db.DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    replies = db.relationship(
+        "FeatureRequestReply",
+        backref="feature_request",
+        cascade="all, delete-orphan",
+        order_by="FeatureRequestReply.created_at",
+    )
+
+
+class FeatureRequestReply(db.Model):
+    __tablename__ = "feature_request_replies"
+
+    id = db.Column(db.Integer, primary_key=True)
+    feature_request_id = db.Column(db.Integer, db.ForeignKey("feature_requests.id"), nullable=False)
+    responder_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    responder_name = db.Column(db.String(100), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+
+
+class PlatformUpdateLog(db.Model):
+    __tablename__ = "platform_update_logs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    release_key = db.Column(db.String(120), unique=True, nullable=False)
+    title = db.Column(db.String(255), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    generated_by = db.Column(db.String(64), nullable=False, default="system")
     created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
